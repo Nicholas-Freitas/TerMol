@@ -6,7 +6,7 @@ A simple molecular renderer for the terminal using RDKit.
 3. [Installation](#installation)
 4. [Usage](#usage)
 8. [License](#license)
-9. [Con](#acknowledgements)
+9. [Contact](#contact)
 
 ## Overview
 This python package allows for the 2D or 3D rendering of molecules in the terminal, using RDKit and Curses.
