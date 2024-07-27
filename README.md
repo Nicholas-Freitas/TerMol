@@ -12,12 +12,12 @@ A simple molecular renderer for the terminal using RDKit.
 This python package allows for the 2D or 3D rendering of molecules in the terminal, using RDKit and Curses.
 
 ## Installation
-TerMol requires RDKit and numpy. For Windows users, Curses must also be installed manually.
-
-After installing requirements and cloning the repo, install TerMol with: 
+After cloning the repo, install TerMol with: 
 ```bash
 pip install . 
 ```
+
+This will also install the requirements of RDKit and numpy. On Windows only, Curses must be installed manually.
 
 ## Usage:
 
