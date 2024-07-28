@@ -1,6 +1,8 @@
 # TerMol
 A simple molecular renderer for the terminal using RDKit.
 
+![](assets/molecules.mp4)
+
 ## Table of Contents
 1. [Overview](#overview)
 3. [Installation](#installation)
