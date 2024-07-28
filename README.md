@@ -1,7 +1,7 @@
 # TerMol
 A simple molecular renderer for the terminal using RDKit.
 
-https://github.com/user-attachments/assets/6fa67f32-f310-4851-aabf-9476feff8eca
+![molecules](https://github.com/user-attachments/assets/a80a2287-8aeb-4055-a71c-88a9c4474998)
 
 ## Table of Contents
 1. [Overview](#overview)
