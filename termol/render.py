@@ -6,6 +6,7 @@ import curses
 from pathlib import Path
 from .canvas import MoleculeCanvas
 import time
+import importlib.resources as pkg_resources
 
 def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
 
@@ -41,7 +42,44 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
     atom_charges   = [atom.GetFormalCharge() for atom in mol.GetAtoms()]
     bonds          = [(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()) for bond in mol.GetBonds()]
 
+    # Rotate the molecule so it's flat on the camera plane:
+    if three_d:
+       atom_positions = rotate_molecule_for_screen(atom_positions)
+
+    print(atom_positions.shape)
+
     return atom_positions, atom_elements, atom_charges, bonds
+
+def rotate_molecule_for_screen(atom_positions):
+    '''
+    Here, we rotate the molecule so it's longest axis is in the x-direction, it's second longest in the y-direction, and it's shortest in the z-direction.
+    This avoids the molecule lying flat in the camera view.
+    Thank you to ChatGPT lol.
+    Inputs:
+        atom_positions: The 3D coordinates of the molecule.
+    Returns:
+        rotated_positions: The rotated 3D coordinates of the molecule.
+    '''
+
+    # Step 1: Center the data
+    mean_centered = atom_positions - np.mean(atom_positions, axis=0)
+
+    # Step 2: Compute the covariance matrix
+    cov_matrix = np.cov(mean_centered, rowvar=False)
+
+    # Step 3: Perform eigen decomposition
+    eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+
+    # Step 4: Sort the eigenvectors by eigenvalues in descending order
+    sorted_indices = np.argsort(eigenvalues)[::-1]
+    sorted_eigenvectors = eigenvectors[:, sorted_indices]
+
+    # Step 5: Rotate the data
+    rotated_positions = np.dot(mean_centered, sorted_eigenvectors)
+
+    return rotated_positions
+
+
 
 def rotation_matrix(axis, theta):
     """
@@ -65,21 +103,21 @@ def rotate_points(points, axis, theta):
     return np.array([np.dot(R, point) for point in points])
 
 def show_molecule_2D(molecule_data, canvas, name=None):
+    print('Drawing 2D molecule!')
     # Get molecule data:
     atom_positions, atom_elements, atom_charges, bonds = molecule_data
 
     # Scale to fit the canvas:
-    # What's the maximum distance between any two atoms?
-    max_distance = 0
-    for i in range(len(atom_positions)):
-        for j in range(i+1, len(atom_positions)):
-            distance = np.linalg.norm(atom_positions[i] - atom_positions[j])
-            max_distance = max(max_distance, distance)
-    
-    scaling_factor = 1.8 * min(canvas.width, canvas.height) / max_distance
+    # What's the minimum and maximum x and y values?
+    min_x, max_x = np.min(atom_positions[:, 0]), np.max(atom_positions[:, 0])
+    min_y, max_y = np.min(atom_positions[:, 1]), np.max(atom_positions[:, 1])
+
+    # How much would we need to scale on the x and y axes, to fit the width and height?
+    x_scaling_factor = canvas.width / (max_x - min_x)
+    y_scaling_factor = canvas.height / (max_y - min_y)
 
     # Scale all positions:
-    atom_positions *= scaling_factor
+    atom_positions *= 0.9 * min(x_scaling_factor, canvas.aspect_ratio*y_scaling_factor)
 
     # Stretch to aspect ratio:
     atom_positions[:, 1] /= canvas.aspect_ratio
@@ -125,7 +163,20 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
     # When we'll quit, if we have a timeout:
     timeout = time.time() + timeout if timeout else None
 
-    theta = 0
+    # Which way will we rotate?
+    rotation_axis_map = {
+        (ord('A'), ord('a'), curses.KEY_LEFT):    (0, 1, 0),
+        (ord('D'), ord('d'), curses.KEY_RIGHT):   (0, -1, 0),
+        (ord('W'), ord('w'), curses.KEY_UP):      (1, 0, 0),
+        (ord('S'), ord('s'), curses.KEY_DOWN):    (-1, 0, 0),
+        (ord('Q'), ord('q')):                     (0, 0, -1),
+        (ord('E'), ord('e')):                     (0, 0, 1)
+    }
+    all_rotation_keys = [key for key_list in rotation_axis_map.keys() for key in key_list]
+    rotation_axis = (0,1,0)
+    rotation_paused = False
+
+    theta = 1
     while True:
         stdscr.clear()
         
@@ -152,14 +203,15 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
             header = header.center(canvas.char_width, "=")
             stdscr.addstr(0, 0, header)
         
-        # Rotate the 3D coordinates:
-        rotated_positions = rotate_points(atom_positions, (0, 1, 0), np.radians(theta))
+        if not rotation_paused:
+            atom_positions = rotate_points(atom_positions, rotation_axis, np.radians(theta))
 
         # Stretch to aspect ratio:
-        rotated_positions[:, 1] /= canvas.aspect_ratio
+        stretched_positions = atom_positions.copy()
+        stretched_positions[:, 1] /= canvas.aspect_ratio
 
         # Get 2D positions:
-        atom_positions_2D = [(pos[0], pos[1]) for pos in rotated_positions]
+        atom_positions_2D = [(pos[0], pos[1]) for pos in stretched_positions]
 
         canvas.clear()
         canvas.draw_molecules(atom_positions_2D, atom_elements, atom_charges, bonds)
@@ -169,20 +221,30 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
             pass  # Handle the error gracefully
 
         stdscr.refresh()
-        theta += np.radians(100)  # For some reason this isn't working as expected...
         
         key = stdscr.getch()
         if key != -1:
             if key == curses.KEY_RESIZE:
                 continue  # Ignore resize keypress
-            break  # Exit on any other key press
+            elif key in all_rotation_keys:
+                for key_list, axis in rotation_axis_map.items():
+                    if key in key_list:
+                        rotation_axis = axis
+                        rotation_paused = False
+            elif key == ord(' '):
+                rotation_paused = not rotation_paused
+            else:
+                break  # Exit on any other key press
 
         if timeout and time.time() > timeout:
-            break
+            # If we've paused using the spacebar, we don't want to exit on timeout
+            if not rotation_paused:
+                break
 
-def draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None):
+def draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None, stdscr=None):
     '''
-    Main function for TerMol:
+    Main function for TerMol. This wraps the draw_persistent() function in a curses wrapper.
+    This is so the user can utilize the draw_persistent() function directly if they want to keep the curses window open between renders.
     Inputs:
         input_mol: Either a SMILES string or a file path to a .sdf or .mol file.
         name: Optional name for the molecule.
@@ -190,7 +252,30 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=
         height: Height of the canvas in characters.
         three_d: Whether to show the molecule in 3D.
         add_hydrogens: Whether to add hydrogens to the molecule.
-        timeout: Time in seconds to show the molecule. If None, the molecule will be shown indefinitely Only applies for 3D viewing.
+        timeout: Time in seconds to show the molecule. If None, the molecule will be shown indefinitely. Only applies for 3D viewing.
+        stdscr: The curses stdscr object. If None, the function will create a new curses window. This only needs to be used if you're keeping the curses Window between renders.
+    Returns:
+        None
+        Renders 2D or 3D ASCII art of the molecule.
+    '''
+    if three_d:
+        curses.wrapper(draw_persistent, input_mol, name=name, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout)
+    else:
+        draw_persistent(None, input_mol, name=name, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout)
+
+def draw_persistent(stdscr, input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None):
+    '''
+    Main function for TerMol:
+    Inputs:
+        stdscr: The curses stdscr object. Allows for a persistent window between molecules.
+        input_mol: Either a SMILES string or a file path to a .sdf or .mol file.
+        name: Optional name for the molecule.
+        width: Width of the canvas in characters.'
+        height: Height of the canvas in characters.
+        three_d: Whether to show the molecule in 3D.
+        add_hydrogens: Whether to add hydrogens to the molecule.
+        timeout: Time in seconds to show the molecule. If None, the molecule will be shown indefinitely. Only applies for 3D viewing.
+        stdscr: The curses stdscr object. If None, the function will create a new curses window. This only needs to be used if you're keeping the curses Window between renders.
     Returns:
         None
         Renders 2D or 3D ASCII art of the molecule.
@@ -203,16 +288,34 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=
 
     # Show the molecule:
     if three_d:
-        curses.wrapper(show_molecule_3D, molecule_data, canvas, name=name, timeout=timeout) 
+        if stdscr:
+            show_molecule_3D(stdscr, molecule_data, canvas, name=name, timeout=timeout)
+        else:
+            curses.wrapper(show_molecule_3D, molecule_data, canvas, name=name, timeout=timeout) 
     else:
         show_molecule_2D(molecule_data, canvas, name=name)
 
 
-def main():
+def showcase(timeout=5):
     ### Run a showcase of the program ###
+
+    def loop_molecules(stdscr, smiles_dict, name=None, timeout=None):
+        while True:
+            # choose a random molecule:
+            name = np.random.choice(list(smiles_dict.keys()))
+            smiles = smiles_dict[name]
+            
+            try:
+                draw_persistent(stdscr, smiles, name=name, timeout=timeout)
+            except Exception as e:
+                if Exception == KeyboardInterrupt:
+                    break
+                print(f"Failed to render {name}")
+                continue
+
     # Load CSV as dictionary:
     smiles_dict = {}
-    with open('smiles.csv', 'r') as file:
+    with pkg_resources.open_text(__package__, 'smiles_1000.csv') as file:
         lines = file.readlines()
         for line in lines:
             split_line = line.split('\t')
@@ -221,25 +324,4 @@ def main():
             name, smiles = split_line
             smiles_dict[name] = smiles
     
-    while True:
-
-        # choose a random molecule:
-        name = np.random.choice(list(smiles_dict.keys()))
-        smiles = smiles_dict[name]
-        
-        try:
-            draw(smiles, name=name, three_d=True, add_hydrogens=False, timeout=10)
-        except Exception as e:
-            if Exception == KeyboardInterrupt:
-                break
-            print(f"Failed to render {name}")
-            continue
-
-if __name__ == "__main__":
-    ### Example Usage ###
-    # smiles = "c1cc2c(cc1[N+](=O)[O-])[nH]nn2" # Nitrobenzotriazole
-    # name = "Nitrobenzotriazole"
-    # draw(smiles, name=name, three_d=True, add_hydrogens=True)
-
-    ### Run a showcase of the program ###
-    main()
+    curses.wrapper(loop_molecules, smiles_dict, timeout=timeout)
