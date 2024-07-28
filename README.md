@@ -27,8 +27,9 @@ Import the package and call the draw function as shown:
 ```python
 import termol
 
-smiles = "c1cc2c(cc1[N+](=O)[O-])[nH]nn2" # Nitrobenzotriazole
-name = "Nitrobenzotriazole"
+smiles = "c1cc2c(cc1[N+](=O)[O-])[nH]nn2"
+name   = "Nitrobenzotriazole"
+
 termol.draw(smiles, name=name)
 ```
 
