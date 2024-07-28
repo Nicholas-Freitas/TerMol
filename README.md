@@ -1,7 +1,7 @@
 # TerMol
 A simple molecular renderer for the terminal using RDKit.
 
-![](assets/molecules.mp4)
+![molecules](https://github.com/user-attachments/assets/a80a2287-8aeb-4055-a71c-88a9c4474998)
 
 ## Table of Contents
 1. [Overview](#overview)
@@ -14,12 +14,12 @@ A simple molecular renderer for the terminal using RDKit.
 This python package allows for the 2D or 3D rendering of molecules in the terminal, using RDKit and Curses.
 
 ## Installation
-After cloning the repo, install TerMol with: 
+Install TerMol with:
 ```bash
-pip install . 
+pip install termol
 ```
 
-This will also install the requirements of RDKit and numpy. On Windows only, Curses must be installed manually.
+On Windows only, the Curses python package must be installed manually.
 
 ## Usage:
 
@@ -27,8 +27,9 @@ Import the package and call the draw function as shown:
 ```python
 import termol
 
-smiles = "c1cc2c(cc1[N+](=O)[O-])[nH]nn2" # Nitrobenzotriazole
-name = "Nitrobenzotriazole"
+smiles = "c1cc2c(cc1[N+](=O)[O-])[nH]nn2"
+name   = "Nitrobenzotriazole"
+
 termol.draw(smiles, name=name)
 ```
 
