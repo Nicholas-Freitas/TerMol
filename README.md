@@ -39,5 +39,5 @@ termol.draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydroge
 This software is provided under the MIT License.
 
 ## Contact:
-(Nicholas Freitas)[https://github.com/Nicholas-Freitas]
+[Nicholas Freitas](https://github.com/Nicholas-Freitas)
 
