@@ -44,7 +44,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
     atom_positions = scale_for_canvas(atom_positions, canvas)
 
     # When we'll quit, if we have a timeout:
-    timeout = time.time() + timeout if timeout else None
+    end_time = time.time() + timeout if timeout else None
 
     # Which way will we rotate?
     rotation_axis_map = {
@@ -76,6 +76,9 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
                 if key == curses.KEY_RESIZE:
                     continue  # Ignore resize keypress
                 break  # Exit on any other key press
+
+            # Pause timeout:
+            end_time = time.time() + timeout if timeout else None
             continue
         
         if name:
@@ -125,7 +128,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
             else:
                 break  # Exit on any other key press
 
-        if timeout and time.time() > timeout:
+        if timeout and time.time() > end_time:
             # If we've paused using the spacebar, we don't want to exit on timeout
             if not rotation_paused:
                 break
