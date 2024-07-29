@@ -77,7 +77,24 @@ def rotate_molecule_for_screen(atom_positions):
 
     return rotated_positions
 
+def scale_for_canvas(atom_positions, canvas):
+    '''
+    Given a set of atom positions and canvas object, increase the size of the molecule to fill up the screen space.
+    Assumes molecules is centered at (0,0) and sitting roughly flat on the x-y plane.
+    '''
+    # Scale to fit the canvas:
+    # What's the minimum and maximum x and y values?
+    min_x, max_x = np.min(atom_positions[:, 0]), np.max(atom_positions[:, 0])
+    min_y, max_y = np.min(atom_positions[:, 1]), np.max(atom_positions[:, 1])
 
+    # How much would we need to scale on the x and y axes, to fit the width and height?
+    x_scaling_factor = canvas.width / (max_x - min_x)
+    y_scaling_factor = canvas.height / (max_y - min_y)
+
+    # Scale all positions:
+    atom_positions *= 0.9 * min(x_scaling_factor, canvas.aspect_ratio*y_scaling_factor)
+
+    return atom_positions
 
 def rotation_matrix(axis, theta):
     """
@@ -105,16 +122,7 @@ def show_molecule_2D(molecule_data, canvas, name=None):
     atom_positions, atom_elements, atom_charges, bonds = molecule_data
 
     # Scale to fit the canvas:
-    # What's the minimum and maximum x and y values?
-    min_x, max_x = np.min(atom_positions[:, 0]), np.max(atom_positions[:, 0])
-    min_y, max_y = np.min(atom_positions[:, 1]), np.max(atom_positions[:, 1])
-
-    # How much would we need to scale on the x and y axes, to fit the width and height?
-    x_scaling_factor = canvas.width / (max_x - min_x)
-    y_scaling_factor = canvas.height / (max_y - min_y)
-
-    # Scale all positions:
-    atom_positions *= 0.9 * min(x_scaling_factor, canvas.aspect_ratio*y_scaling_factor)
+    atom_positions = scale_for_canvas(atom_positions, canvas)
 
     # Stretch to aspect ratio:
     atom_positions[:, 1] /= canvas.aspect_ratio
@@ -143,19 +151,8 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
     #Get molecule data:
     atom_positions, atom_elements, atom_charges, bonds = molecule_data
 
-    #Do an initial scaling of the molecule:
     # Scale to fit the canvas:
-    # What's the maximum distance between any two atoms?
-    max_distance = 0
-    for i in range(len(atom_positions)):
-        for j in range(i+1, len(atom_positions)):
-            distance = np.linalg.norm(atom_positions[i] - atom_positions[j])
-            max_distance = max(max_distance, distance)
-    
-    scaling_factor = 2* min(canvas.width, canvas.height) / max_distance
-
-    # Scale all positions:
-    atom_positions *= scaling_factor
+    atom_positions = scale_for_canvas(atom_positions, canvas)
 
     # When we'll quit, if we have a timeout:
     timeout = time.time() + timeout if timeout else None
@@ -230,6 +227,12 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
                         rotation_paused = False
             elif key == ord(' '):
                 rotation_paused = not rotation_paused
+            elif key in [ord('R'), ord('r')]:
+                # Scale the molecule down (further away):
+                atom_positions *= 0.99
+            elif key in [ord('F'), ord('f')]:
+                # Scale the molecule up (closer):
+                atom_positions *= 1.01
             else:
                 break  # Exit on any other key press
 
@@ -292,23 +295,57 @@ def draw_persistent(stdscr, input_mol, name=None, width=80, height=40, three_d=T
     else:
         show_molecule_2D(molecule_data, canvas, name=name)
 
+def draw_multi(input_mols, names=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None):
+    '''
+    Wraps termol.draw_persistent() to allow for multiple molecules to be rendered in sequence.
+    Inputs:
+        input_mols: A list of SMILES strings or file paths to .sdf or .mol files.
+        names: Optional names for the molecules. If None, the names will be the file names or "Molecule X" where X is the index.
+                If a list is provided, it must be the same length as the number of molecules.
+        width: Width of the canvas in characters.'
+        height: Height of the canvas in characters.
+        three_d: Whether to show the molecule in 3D.
+        add_hydrogens: Whether to add hydrogens to the molecule.
+        timeout: Time in seconds to show the molecule. If None, the molecule will be shown indefinitely. Only applies for 3D viewing.
+    Returns:
+        None
+        Renders 2D or 3D ASCII art of the molecules in sequence.
+    '''
 
-def showcase(timeout=5):
-    ### Run a showcase of the program ###
+    if names and len(names) != len(input_mols):
+        raise ValueError("The number of names must be the same as the number of molecules!")
+    
+    if names is None:
+        names = [f"Molecule {i+1}" for i in range(len(input_mols))] # 1-indexing for the biologists. Forgive me.
 
-    def loop_molecules(stdscr, smiles_dict, name=None, timeout=None):
-        while True:
+    ### For 2D rendering, just loop:
+    if not three_d:
+        for i in range(len(input_mols)):
             # choose a random molecule:
-            name = np.random.choice(list(smiles_dict.keys()))
-            smiles = smiles_dict[name]
+            name = names[i]
+            molecule = input_mols[i]
+            draw(molecule, name=name, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens)
+        return
+    
+    ### For 3D rendering, create a persistent window, then loop using draw_persistent():
+    
+    def loop_molecules(stdscr, molecules, names, timeout=None):
+        for i in range(len(molecules)):
+            name = names[i]
+            molecule = molecules[i]
             
             try:
-                draw_persistent(stdscr, smiles, name=name, timeout=timeout)
+                draw_persistent(stdscr, molecule, name=name, timeout=timeout, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens)
             except Exception as e:
                 if Exception == KeyboardInterrupt:
                     break
                 print(f"Failed to render {name}")
                 continue
+    
+    curses.wrapper(loop_molecules, input_mols, names, timeout=timeout)
+
+def showcase(timeout=5, width=80, height=40):
+    ### Run a showcase of the program ###
 
     # Load CSV as dictionary:
     smiles_dict = {}
@@ -321,4 +358,6 @@ def showcase(timeout=5):
             name, smiles = split_line
             smiles_dict[name] = smiles
     
-    curses.wrapper(loop_molecules, smiles_dict, timeout=timeout)
+    molecules = list(smiles_dict.values())
+    names = list(smiles_dict.keys())
+    draw_multi(molecules, names, width=width, height=height, timeout=timeout)
