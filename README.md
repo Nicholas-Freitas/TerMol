@@ -36,7 +36,10 @@ termol.draw(smiles, name=name)
 
 The molecule input can be a smiles string or an RDKit-compatible filepath (.mol2, .sdf, etc). 
 
+### Controlling the viewer
 In the 3D viewer, the molecule will initially rotate about the Y-axis. To change the direction of the rotation, use the arrow keys, or WASD+QE. To pause rotation, hit the spacebar.
+
+To make the molecule smaller or larger, you can use the R and F keys, respectively.
 
 To exit the 3D viewer, hit any other key.
 
@@ -68,6 +71,9 @@ The draw function only requires the molecule SMILES/file as input. Other options
 ```python
 termol.draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None)
 ```
+
+### Drawing Many Molecules
+The `termol.draw_multi()` function takes as input a list of SMILES or molecule files as input, and displays them in succession (In 2D or 3D). If the optional argument `names` is provided, it must be the same length as the number of inputs. All other arguments are the same.
 
 ## License:
 This software is provided under the MIT License.
