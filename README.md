@@ -45,7 +45,7 @@ Sometimes, a simple 2D graphic is sufficient. To render in 2D, use the flag `thr
 ```python
 termol.draw(smiles, name=name, three_d=False)
 ```
-![image](https://github.com/user-attachments/assets/21a4eb5d-6d3c-4bc0-9af7-7eae50c2d1cd)
+![image](https://github.com/user-attachments/assets/63694895-b34c-4166-8815-0da9afc6bc62)
 
 ### Showcase:
 To display a showcase of termol's capabilities, you may run:
@@ -59,11 +59,11 @@ Want a fun screensaver? Use the `timeout=60` argument to cycle through a random 
 
 ### Other Options
 The draw function only requires the molecule SMILES/file as input. Other options include:
-- name: A molecule name to be displayed
-- width, height: The size of the 'screen' (in number of characters) Default 80x40.
-- three_d: defaults to True to display in 3D. Set to False to print a 2D view.
-- add_hydrogens: Have RDKit attempt to add hydrogens automatically. Default False.
-- timeout: In the 3D viewer, this will automatically close after this number of seconds. Default None, which allows the viewer to stay open indefinitely.
+- `name`: A molecule name to be displayed
+- `width, height`: The size of the 'screen' (in number of characters) Default 80x40.
+- `three_d`: defaults to True to display in 3D. Set to False to print a 2D view.
+- `add_hydrogens`: Have RDKit attempt to add hydrogens automatically. Default False.
+- `timeout`: In the 3D viewer, this will automatically close after this number of seconds. Default None, which allows the viewer to stay open indefinitely.
 
 ```python
 termol.draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None)
