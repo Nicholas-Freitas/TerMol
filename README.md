@@ -26,7 +26,13 @@ Once installed, you can use the `termol` command to render molecules in 2D or 3D
 
 It takes as input one or more SMILES strings or RDKit compatible molecule files (.sdf, .mol2, separated with spaces. Inputs can also be a text file with one input per line (file or smiles), or a CSV file in the format "name, smiles".
 
-Example usage: `termol ESR.sdf "O=C4N(Cc1ccccc1)CC(C(=O)NC(Cc2ccccc2)C(O)CNCc3cccc(N(C)C)c3)(N4)Cc5ccccc5" "O=C(O)CCCCC(=O)O"`
+Example usage: 
+
+`termol "O=C(O)CCCCC(=O)O"`
+
+Or: 
+
+`termol ESR.sdf "O=C4N(Cc1ccccc1)CC(C(=O)NC(Cc2ccccc2)C(O)CNCc3cccc(N(C)C)c3)(N4)Cc5ccccc5" "O=C(O)CCCCC(=O)O"`
 
 Additional arguments include:
 - `--names`: The molecule names to be displayed (separated by spaces).
