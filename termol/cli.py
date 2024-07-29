@@ -15,8 +15,6 @@ def termol_cli():
 
     args = parser.parse_args()
 
-    print('Names', args.names)
-
     # Process inputs
     names_list = None
     if args.names:
@@ -40,8 +38,6 @@ def termol_cli():
                         names_list.append(row[0])
         else:
             molecules_list.append(input_item)
-    
-    print(molecules_list)
 
     # Process names
     if names_list and len(names_list) != len(molecules_list):
