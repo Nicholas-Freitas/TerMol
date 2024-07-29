@@ -21,7 +21,28 @@ pip install termol
 
 On Windows only, the Curses python package must be installed manually.
 
-## Usage:
+## Command-Line Usage:
+Once installed, you can use the `termol` command to render molecules in 2D or 3D.
+
+It takes as input one or more SMILES strings or RDKit compatible molecule files (.sdf, .mol2, separated with spaces. Inputs can also be a text file with one input per line (file or smiles), or a CSV file in the format "name, smiles".
+
+Example usage: `termol ESR.sdf "O=C4N(Cc1ccccc1)CC(C(=O)NC(Cc2ccccc2)C(O)CNCc3cccc(N(C)C)c3)(N4)Cc5ccccc5" "O=C(O)CCCCC(=O)O"`
+
+Additional arguments include:
+- `--names`: The molecule names to be displayed (separated by spaces).
+- `--width, --height`: The size of the 'screen' (in number of characters) Default 80x40.
+- `--show2D`: Display in 2D instead of 3D.
+- `--add_hydrogens`: Have RDKit attempt to add hydrogens automatically. Default False.
+- `--timeout`: In the 3D viewer, this will automatically close after this number of seconds. Default None, which allows the viewer to stay open indefinitely.
+
+### Controlling the viewer
+In the 3D viewer, the molecule will initially rotate about the Y-axis. To change the direction of the rotation, use the arrow keys, or WASD+QE. To pause rotation, hit the spacebar.
+
+To make the molecule smaller or larger, you can use the R and F keys, respectively.
+
+To exit the 3D viewer, hit any other key.
+
+## Python Usage:
 
 ### 3D Rendering:
 Import the package and call the draw function as shown:
@@ -35,13 +56,6 @@ termol.draw(smiles, name=name)
 ```
 
 The molecule input can be a smiles string or an RDKit-compatible filepath (.mol2, .sdf, etc). 
-
-### Controlling the viewer
-In the 3D viewer, the molecule will initially rotate about the Y-axis. To change the direction of the rotation, use the arrow keys, or WASD+QE. To pause rotation, hit the spacebar.
-
-To make the molecule smaller or larger, you can use the R and F keys, respectively.
-
-To exit the 3D viewer, hit any other key.
 
 ### 2D Rendering:
 Sometimes, a simple 2D graphic is sufficient. To render in 2D, use the flag `three_d=False`:
