@@ -46,8 +46,6 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
     if three_d:
        atom_positions = rotate_molecule_for_screen(atom_positions)
 
-    print(atom_positions.shape)
-
     return atom_positions, atom_elements, atom_charges, bonds
 
 def rotate_molecule_for_screen(atom_positions):
@@ -103,7 +101,6 @@ def rotate_points(points, axis, theta):
     return np.array([np.dot(R, point) for point in points])
 
 def show_molecule_2D(molecule_data, canvas, name=None):
-    print('Drawing 2D molecule!')
     # Get molecule data:
     atom_positions, atom_elements, atom_charges, bonds = molecule_data
 
