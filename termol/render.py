@@ -172,12 +172,13 @@ def draw_persistent(stdscr, input_mol, name=None, width=80, height=40, three_d=T
         None
         Renders 2D or 3D ASCII art of the molecule.
     '''
+
     # Get the molecule data:
     molecule_data = get_molecule_data(input_mol, three_d=three_d, add_hydrogens=add_hydrogens)
 
     # Create a canvas:
     canvas = MoleculeCanvas(width, height, width, height, aspect_ratio=2.0)
-
+    
     # Show the molecule:
     if three_d:
         if stdscr:

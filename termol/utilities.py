@@ -12,6 +12,8 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
     # Is the input_mol a filepath or a SMILES string?
     if Path(input_mol).suffix in ['.sdf', '.mol']:
         mol = Chem.MolFromMolFile(input_mol)
+    elif Path(input_mol).suffix in ['.pdb']:
+        mol = Chem.MolFromPDBFile(input_mol)
     else:
         mol = Chem.MolFromSmiles(input_mol)
     
@@ -21,13 +23,13 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
     if add_hydrogens:
         mol = Chem.AddHs(mol)
 
-    if three_d:
-        # Generate 3D coordinates
-        AllChem.EmbedMolecule(mol)
-        AllChem.MMFFOptimizeMolecule(mol)
-    else:
-        AllChem.Compute2DCoords(mol)
-    
+    if not Path(input_mol).suffix in ['.pdb']:
+        if three_d:
+            # Generate 3D coordinates
+            AllChem.EmbedMolecule(mol)
+            AllChem.MMFFOptimizeMolecule(mol)
+        else:
+            AllChem.Compute2DCoords(mol)
     
     # Get bond and atom positions
     conf = mol.GetConformer()
@@ -41,7 +43,7 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
     # Rotate the molecule so it's flat on the camera plane:
     if three_d:
        atom_positions = rotate_molecule_for_screen(atom_positions)
-
+    
     return atom_positions, atom_elements, atom_charges, bonds
 
 def rotate_molecule_for_screen(atom_positions):
