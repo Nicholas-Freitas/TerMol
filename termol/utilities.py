@@ -90,7 +90,7 @@ def scale_for_canvas(atom_positions, canvas):
     y_scaling_factor = canvas.height / (max_y - min_y)
 
     # Scale all positions:
-    atom_positions *= 0.9 * min(x_scaling_factor, canvas.aspect_ratio*y_scaling_factor)
+    atom_positions *= 0.8 * min(x_scaling_factor, canvas.aspect_ratio*y_scaling_factor)
 
     return atom_positions
 
