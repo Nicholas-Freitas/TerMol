@@ -6,7 +6,8 @@ A simple molecular renderer for the terminal using RDKit.
 ## Table of Contents
 1. [Overview](#overview)
 3. [Installation](#installation)
-4. [Usage](#usage)
+4. [Command-Line Usage](#command-line-usage)
+5. [Python Usage](#python-usage)
 8. [License](#license)
 9. [Contact](#contact)
 
@@ -36,7 +37,7 @@ Or:
 
 Additional arguments include:
 - `--names`: The molecule names to be displayed (separated by spaces).
-- `--width, --height`: The size of the 'screen' (in number of characters) Default 80x40.
+- `--width, --height`: The size of the 'screen' (in number of characters) Default 80x40. In the 3D viewer, if width and height aren't specified, the viewer will resize to fill the terminal window.
 - `--show2D`: Display in 2D instead of 3D.
 - `--add_hydrogens`: Have RDKit attempt to add hydrogens automatically. Default False.
 - `--timeout`: In the 3D viewer, this will automatically close after this number of seconds. Default None, which allows the viewer to stay open indefinitely.
@@ -83,13 +84,14 @@ Want a fun screensaver? Use the `timeout=60` argument to cycle through a random 
 ### Other Options
 The draw function only requires the molecule SMILES/file as input. Other options include:
 - `name`: A molecule name to be displayed
-- `width, height`: The size of the 'screen' (in number of characters) Default 80x40.
+- `width, height`: The size of the 'screen' (in number of characters) Default 80x40. When using the 3D viewer (`three_d=True`), these values will be ignored by default unless `auto_resize=False`.
 - `three_d`: defaults to True to display in 3D. Set to False to print a 2D view.
 - `add_hydrogens`: Have RDKit attempt to add hydrogens automatically. Default False.
 - `timeout`: In the 3D viewer, this will automatically close after this number of seconds. Default None, which allows the viewer to stay open indefinitely.
+- `auto_resize`: In the 3D viewer, True will cause the viewing window to resize to the terminal window. (Default True).
 
 ```python
-termol.draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None)
+termol.draw(input_mol, name=None, width=80, height=40, auto_resize=False, three_d=True, add_hydrogens=False, timeout=None)
 ```
 
 ### Drawing Many Molecules
