@@ -32,7 +32,7 @@ def show_molecule_2D(molecule_data, canvas, name=None):
 
     print(canvas)
 
-def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
+def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None, auto_resize=True):
     curses.curs_set(0)  # Hide cursor
     stdscr.nodelay(1)  # Make getch non-blocking
     stdscr.timeout(50)  # Refresh every 50ms
@@ -41,6 +41,9 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
     atom_positions, atom_elements, atom_charges, bonds = molecule_data
 
     # Scale to fit the canvas:
+    if auto_resize:
+        term_height, term_width = stdscr.getmaxyx()
+        canvas.resize_canvas(term_width-1, term_height-1)
     atom_positions = scale_for_canvas(atom_positions, canvas)
 
     # When we'll quit, if we have a timeout:
@@ -59,15 +62,21 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
     rotation_axis = (0,1,0)
     rotation_paused = False
 
+    stdscr.clear()
+    
     theta = 1
     while True:
-        stdscr.clear()
-        
+        stdscr.erase()
+
         # Get terminal size
         term_height, term_width = stdscr.getmaxyx()
+
+        # Resize canvas:
+        if auto_resize:
+            canvas.resize_canvas(term_width-1, term_height-1)
         
         # Ensure the canvas fits within the terminal size
-        if canvas.char_width > term_width or canvas.char_height > term_height+1:
+        if canvas.char_width > term_width-1 or canvas.char_height > term_height-1:
             error_message = "Please increase the size of your terminal window."
             stdscr.addstr(0, 0, error_message)
             stdscr.refresh()
@@ -84,7 +93,8 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
         if name:
             # Create a stylish header:
             header = f" {name} "
-            if len(header) > canvas.char_width-10:
+            #header = f" {canvas.char_width, canvas.char_height, canvas.width, canvas.height} "
+            if len(header) > canvas.char_width-5:
                 header = header[:canvas.char_width-10] + "... "
             header = header.center(canvas.char_width, "=")
             stdscr.addstr(0, 0, header)
@@ -102,7 +112,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
         canvas.clear()
         canvas.draw_molecules(atom_positions_2D, atom_elements, atom_charges, bonds)
         try:
-            stdscr.addstr(1, 1, str(canvas))
+            stdscr.addstr(1, 0, str(canvas))
         except curses.error:
             pass  # Handle the error gracefully
 
@@ -133,7 +143,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None):
             if not rotation_paused:
                 break
 
-def draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None, stdscr=None):
+def draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None, stdscr=None, auto_resize=True):
     '''
     Main function for TerMol. This wraps the draw_persistent() function in a curses wrapper.
     This is so the user can utilize the draw_persistent() function directly if they want to keep the curses window open between renders.
@@ -151,11 +161,11 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=
         Renders 2D or 3D ASCII art of the molecule.
     '''
     if three_d:
-        curses.wrapper(draw_persistent, input_mol, name=name, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout)
+        curses.wrapper(draw_persistent, input_mol, name=name, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout, auto_resize=auto_resize)
     else:
-        draw_persistent(None, input_mol, name=name, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout)
+        draw_persistent(None, input_mol, name=name, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout, auto_resize=auto_resize)
 
-def draw_persistent(stdscr, input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None):
+def draw_persistent(stdscr, input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None, auto_resize=True):
     '''
     Main function for TerMol:
     Inputs:
@@ -168,6 +178,7 @@ def draw_persistent(stdscr, input_mol, name=None, width=80, height=40, three_d=T
         add_hydrogens: Whether to add hydrogens to the molecule.
         timeout: Time in seconds to show the molecule. If None, the molecule will be shown indefinitely. Only applies for 3D viewing.
         stdscr: The curses stdscr object. If None, the function will create a new curses window. This only needs to be used if you're keeping the curses Window between renders.
+        auto_resize: Whether to automatically resize the canvas to fit the terminal window. Only applies for 3D viewing.
     Returns:
         None
         Renders 2D or 3D ASCII art of the molecule.
@@ -177,18 +188,19 @@ def draw_persistent(stdscr, input_mol, name=None, width=80, height=40, three_d=T
     molecule_data = get_molecule_data(input_mol, three_d=three_d, add_hydrogens=add_hydrogens)
 
     # Create a canvas:
-    canvas = MoleculeCanvas(width, height, width, height, aspect_ratio=2.0)
-    
+    # The canvas has a width and height in characters, and a width and height in Angstroms. Here, we're making them the same.
+    canvas = MoleculeCanvas(width, height, width*1, height*1, aspect_ratio=2.0)
+
     # Show the molecule:
     if three_d:
         if stdscr:
-            show_molecule_3D(stdscr, molecule_data, canvas, name=name, timeout=timeout)
+            show_molecule_3D(stdscr, molecule_data, canvas, name=name, timeout=timeout, auto_resize=auto_resize)
         else:
-            curses.wrapper(show_molecule_3D, molecule_data, canvas, name=name, timeout=timeout) 
+            curses.wrapper(show_molecule_3D, molecule_data, canvas, name=name, timeout=timeout, auto_resize=auto_resize) 
     else:
         show_molecule_2D(molecule_data, canvas, name=name)
 
-def draw_multi(input_mols, names=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None):
+def draw_multi(input_mols, names=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None, auto_resize=True):
     '''
     Wraps termol.draw_persistent() to allow for multiple molecules to be rendered in sequence.
     Inputs:
@@ -228,7 +240,7 @@ def draw_multi(input_mols, names=None, width=80, height=40, three_d=True, add_hy
             molecule = molecules[i]
             
             try:
-                draw_persistent(stdscr, molecule, name=name, timeout=timeout, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens)
+                draw_persistent(stdscr, molecule, name=name, timeout=timeout, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens, auto_resize=auto_resize)
             except Exception as e:
                 if Exception == KeyboardInterrupt:
                     break
@@ -253,4 +265,4 @@ def showcase(timeout=5, width=80, height=40):
     
     molecules = list(smiles_dict.values())
     names = list(smiles_dict.keys())
-    draw_multi(molecules, names, width=width, height=height, timeout=timeout)
+    draw_multi(molecules, names, width=width, height=height, timeout=timeout, auto_resize=True)

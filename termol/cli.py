@@ -8,13 +8,26 @@ def termol_cli():
                         Can also be a text file with one input per line (file or smiles), or a CSV file in the format "name, smiles".')    
     parser.add_argument('--names', nargs='+', help='Names for each molecule. Separate with spaces. Must be same length as inputs.')
     parser.add_argument('--show2D', action='store_true', help='Render molecules in 2D (default 3D).')
-    parser.add_argument('--width', type=int, default=80, help='Width of the output display, in characters (default 80).')
-    parser.add_argument('--height', type=int, default=40, help='Height of the output display in characters (default 40).')
+    parser.add_argument('--width', type=int, help='Width of the output display, in characters. In 2D viewer, default 80. In 3D viewer, default will auto resize the window.')
+    parser.add_argument('--height', type=int, help='Height of the output display in characters. In 2D viewer, default 40. In 3D viewer, default will auto resize the window.')
     parser.add_argument('--add_hydrogens', action='store_true', help='Add hydrogens to the molecule (default no hydrogens).')
     parser.add_argument('--timeout', type=int, default=None, help='3D window will close after this number of seconds (default no timeout).')
-
     args = parser.parse_args()
 
+    # Did we receive input for width and height?
+    width_default = 80
+    height_default = 40
+    if args.width is None and args.height is None:
+        auto_resize = True
+        args.width = width_default
+        args.height = height_default
+    else:
+        if args.width is None:
+            args.width = width_default
+        if args.height is None:
+            args.height = height_default
+        auto_resize = False
+    
     # Process inputs
     names_list = None
     if args.names:
@@ -44,8 +57,8 @@ def termol_cli():
         raise ValueError('Number of names must match number of molecules.')
     
     three_d = not args.show2D
-
-    draw_multi(molecules_list, names=names_list, width=args.width, height=args.height, three_d=three_d, add_hydrogens=args.add_hydrogens, timeout=args.timeout)
+    
+    draw_multi(molecules_list, names=names_list, width=args.width, height=args.height, three_d=three_d, add_hydrogens=args.add_hydrogens, timeout=args.timeout, auto_resize=auto_resize)
 
 
 def showcase_cli(timeout=None, width=80, height=40):
