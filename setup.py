@@ -2,11 +2,11 @@ from setuptools import setup, find_packages
 
 setup(
     name='termol',
-    version='0.1.6',
+    version='0.1.7',
     packages=find_packages(),
     install_requires=[
-        'numpy<2',
-        'rdkit-pypi',
+        'numpy<=2.2.6',
+        'rdkit<=2025.3.3',
     ],
     entry_points={
         'console_scripts': [
