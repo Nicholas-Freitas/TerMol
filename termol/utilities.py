@@ -9,8 +9,11 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
     # Disable those pesky RDKit warnings
     RDLogger.DisableLog('rdApp.*')
 
-    # Is the input_mol a filepath or a SMILES string?
-    if Path(input_mol).suffix in ['.sdf', '.mol']:
+    # Is input_mol an RDKit mol object?
+    if isinstance(input_mol, Chem.Mol):
+        mol = input_mol
+    # else, assume it's a string or file path
+    elif Path(input_mol).suffix in ['.sdf', '.mol']:
         mol = Chem.MolFromMolFile(input_mol)
     elif Path(input_mol).suffix in ['.pdb']:
         mol = Chem.MolFromPDBFile(input_mol)
@@ -23,7 +26,7 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
     if add_hydrogens:
         mol = Chem.AddHs(mol)
 
-    if not Path(input_mol).suffix in ['.pdb']:
+    if isinstance(input_mol, Chem.Mol) or not Path(input_mol).suffix in ['.pdb']:
         if three_d:
             # Generate 3D coordinates
             AllChem.EmbedMolecule(mol)

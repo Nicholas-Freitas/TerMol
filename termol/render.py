@@ -148,7 +148,7 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=
     Main function for TerMol. This wraps the draw_persistent() function in a curses wrapper.
     This is so the user can utilize the draw_persistent() function directly if they want to keep the curses window open between renders.
     Inputs:
-        input_mol: Either a SMILES string or a file path to a .sdf or .mol file.
+        input_mol: Either a SMILES string, file path to a .sdf or .mol file, or rdkit Mol.
         name: Optional name for the molecule.
         width: Width of the canvas in characters.'
         height: Height of the canvas in characters.
@@ -170,7 +170,7 @@ def draw_persistent(stdscr, input_mol, name=None, width=80, height=40, three_d=T
     Main function for TerMol:
     Inputs:
         stdscr: The curses stdscr object. Allows for a persistent window between molecules.
-        input_mol: Either a SMILES string or a file path to a .sdf or .mol file.
+        input_mol: Either a SMILES string,a file path to a .sdf or .mol file, or rdkit Mol.
         name: Optional name for the molecule.
         width: Width of the canvas in characters.'
         height: Height of the canvas in characters.
