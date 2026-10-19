@@ -1,55 +1,181 @@
+# termol/render.py
+import sys
+import copy
+import time
 import numpy as np
 import curses
 from pathlib import Path
-from .canvas import MoleculeCanvas
-from .utilities import get_molecule_data, rotate_points, rotate_molecule_for_screen, scale_for_canvas, rotation_matrix
-import time
 import importlib.resources as pkg_resources
+from typing import Optional, List
 
-def show_molecule_2D(molecule_data, canvas, name=None):
-    # Get molecule data:
+from .canvas import Canvas, MoleculeCanvas, ProteinCanvas
+from .utilities import (
+    get_molecule_data, MoleculeData,
+    rotate_points, rotate_molecule_for_screen, scale_for_canvas, rotation_matrix
+)
+from .backbone import BackbonePoint
+from .pdb import is_pdb_code, clean_pdb_code
+
+
+def scale_protein_for_canvas(backbone_segments: List[List[BackbonePoint]], ligands: list, canvas: Canvas):
+    """Scale and center protein backbone segments and ligands to fit canvas dimensions."""
+    all_pts = []
+    for seg in backbone_segments:
+        for pt in seg:
+            all_pts.append(pt.coord)
+    for lig in ligands:
+        all_pts.append(lig.coord)
+
+    if not all_pts:
+        return
+
+    coords = np.array(all_pts)
+    min_x, max_x = np.min(coords[:, 0]), np.max(coords[:, 0])
+    min_y, max_y = np.min(coords[:, 1]), np.max(coords[:, 1])
+
+    span_x = max(max_x - min_x, 1e-4)
+    span_y = max(max_y - min_y, 1e-4)
+
+    sx = (canvas.width - 4) / span_x
+    sy = (canvas.height - 4) / span_y
+    scale = 0.85 * min(sx, sy * canvas.aspect_ratio)
+
+    for seg in backbone_segments:
+        for pt in seg:
+            pt.coord *= scale
+    for lig in ligands:
+        lig.coord *= scale
+
+
+def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='depth'):
+    """Render a static 2D snapshot of a small molecule or protein."""
+    # Ensure stdout handles UTF-8 safely (e.g. for Braille)
+    if hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+        except Exception:
+            pass
+
+    # Check if input is a protein
+    if isinstance(molecule_data, MoleculeData) and molecule_data.is_protein:
+        protein_canvas = ProteinCanvas(
+            canvas.char_width, canvas.char_height,
+            canvas.width, canvas.height,
+            aspect_ratio=canvas.aspect_ratio,
+            style=style, color_mode=color
+        )
+
+        # Deep copy segments so original coordinates remain pristine
+        segments = copy.deepcopy(molecule_data.backbone_segments)
+        ligands = copy.deepcopy(molecule_data.ligands)
+
+        scale_protein_for_canvas(segments, ligands, protein_canvas)
+
+        # Apply aspect ratio adjustment to Y coordinate
+        for seg in segments:
+            for pt in seg:
+                pt.coord[1] /= protein_canvas.aspect_ratio
+        for lig in ligands:
+            lig.coord[1] /= protein_canvas.aspect_ratio
+
+        protein_canvas.clear()
+        protein_canvas.draw_protein(segments, ligands)
+
+        if name or molecule_data.name:
+            display_name = name or molecule_data.name
+            res_count = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
+            header = f" {display_name} ({res_count} res) [{style.upper()} | {color.upper()}] "
+            if len(header) > protein_canvas.char_width - 6:
+                header = header[:protein_canvas.char_width - 10] + "... "
+            print(header.center(protein_canvas.char_width, "="))
+
+        if color == 'none':
+            print(protein_canvas.render_plain())
+        else:
+            print(protein_canvas.render_ansi())
+        return
+
+    # Small molecule 2D rendering
     atom_positions, atom_elements, atom_charges, bonds = molecule_data
-
-    # Scale to fit the canvas:
+    atom_positions = atom_positions.copy()
     atom_positions = scale_for_canvas(atom_positions, canvas)
-
-    # Stretch to aspect ratio:
     atom_positions[:, 1] /= canvas.aspect_ratio
 
-    # Get 2D positions:
     atom_positions_2D = [(pos[0], pos[1]) for pos in atom_positions]
 
     canvas.clear()
     canvas.draw_molecules(atom_positions_2D, atom_elements, atom_charges, bonds)
 
     if name:
-        # Create a stylish header:
         header = f" {name} "
-        if len(header) > canvas.char_width-10:
-            header = header[:canvas.char_width-10] + "... "
-        header = header.center(canvas.char_width, "=")
-        print(header)
+        if len(header) > canvas.char_width - 10:
+            header = header[:canvas.char_width - 10] + "... "
+        print(header.center(canvas.char_width, "="))
 
     print(canvas)
 
-def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None, auto_resize=True):
-    curses.curs_set(0)  # Hide cursor
-    stdscr.nodelay(1)  # Make getch non-blocking
-    stdscr.timeout(50)  # Refresh every 50ms
-    
-    #Get molecule data:
-    atom_positions, atom_elements, atom_charges, bonds = molecule_data
 
-    # Scale to fit the canvas:
+def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
+                     auto_resize=True, style='ascii', color='depth'):
+    """Interactive 3D curses renderer for small molecules and macromolecules."""
+    curses.curs_set(0)
+    stdscr.nodelay(1)
+    stdscr.timeout(50)
+
+    # Initialize curses color pairs if supported
+    has_curses_colors = curses.has_colors()
+    if has_curses_colors:
+        try:
+            curses.start_color()
+            curses.use_default_colors()
+            # Secondary Structure pairs:
+            curses.init_pair(1, curses.COLOR_MAGENTA, -1)  # Helices
+            curses.init_pair(2, curses.COLOR_YELLOW, -1)   # Sheets
+            curses.init_pair(3, curses.COLOR_CYAN, -1)     # Loops
+            # Rainbow spectrum pairs:
+            curses.init_pair(4, curses.COLOR_BLUE, -1)
+            curses.init_pair(5, curses.COLOR_CYAN, -1)
+            curses.init_pair(6, curses.COLOR_GREEN, -1)
+            curses.init_pair(7, curses.COLOR_YELLOW, -1)
+            curses.init_pair(8, curses.COLOR_RED, -1)
+            # Depth cueing pairs:
+            curses.init_pair(9, curses.COLOR_WHITE, -1)    # Foreground (bright)
+            curses.init_pair(10, curses.COLOR_CYAN, -1)    # Mid-ground
+            curses.init_pair(11, curses.COLOR_BLUE, -1)    # Background (dim)
+            # Ligand pair:
+            curses.init_pair(12, curses.COLOR_YELLOW, -1)
+        except Exception:
+            has_curses_colors = False
+
+    is_protein = isinstance(molecule_data, MoleculeData) and molecule_data.is_protein
+
     if auto_resize:
         term_height, term_width = stdscr.getmaxyx()
-        canvas.resize_canvas(term_width-1, term_height-1)
-    atom_positions = scale_for_canvas(atom_positions, canvas)
+        canvas.resize_canvas(term_width - 1, term_height - 1)
 
-    # When we'll quit, if we have a timeout:
+    if is_protein:
+        active_style = style
+        active_color = color
+        color_modes = ['depth', 'rainbow', 'ss', 'none']
+        styles = ['ascii', 'braille']
+
+        protein_canvas = ProteinCanvas(
+            canvas.char_width, canvas.char_height,
+            canvas.width, canvas.height,
+            aspect_ratio=canvas.aspect_ratio,
+            style=active_style, color_mode=active_color
+        )
+
+        segments = copy.deepcopy(molecule_data.backbone_segments)
+        ligands = copy.deepcopy(molecule_data.ligands)
+        scale_protein_for_canvas(segments, ligands, protein_canvas)
+    else:
+        atom_positions, atom_elements, atom_charges, bonds = molecule_data
+        atom_positions = atom_positions.copy()
+        atom_positions = scale_for_canvas(atom_positions, canvas)
+
     end_time = time.time() + timeout if timeout else None
 
-    # Which way will we rotate?
     rotation_axis_map = {
         (ord('A'), ord('a'), curses.KEY_LEFT):    (0, 1, 0),
         (ord('D'), ord('d'), curses.KEY_RIGHT):   (0, -1, 0),
@@ -59,69 +185,128 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None, aut
         (ord('E'), ord('e')):                     (0, 0, 1)
     }
     all_rotation_keys = [key for key_list in rotation_axis_map.keys() for key in key_list]
-    rotation_axis = (0,1,0)
+    rotation_axis = (0, 1, 0)
     rotation_paused = False
+    theta = 1.2
 
     stdscr.clear()
-    
-    theta = 1
+
     while True:
         stdscr.erase()
-
-        # Get terminal size
         term_height, term_width = stdscr.getmaxyx()
 
-        # Resize canvas:
         if auto_resize:
-            canvas.resize_canvas(term_width-1, term_height-1)
-        
-        # Ensure the canvas fits within the terminal size
-        if canvas.char_width > term_width-1 or canvas.char_height > term_height-1:
-            error_message = "Please increase the size of your terminal window."
-            stdscr.addstr(0, 0, error_message)
-            stdscr.refresh()
-            key = stdscr.getch()
-            if key != -1:
-                if key == curses.KEY_RESIZE:
-                    continue  # Ignore resize keypress
-                break  # Exit on any other key press
+            canvas.resize_canvas(term_width - 1, term_height - 1)
+            if is_protein:
+                protein_canvas.resize_canvas(term_width - 1, term_height - 1)
 
-            # Pause timeout:
-            end_time = time.time() + timeout if timeout else None
-            continue
-        
-        if name:
-            # Create a stylish header:
-            header = f" {name} "
-            #header = f" {canvas.char_width, canvas.char_height, canvas.width, canvas.height} "
-            if len(header) > canvas.char_width-5:
-                header = header[:canvas.char_width-10] + "... "
-            header = header.center(canvas.char_width, "=")
-            stdscr.addstr(0, 0, header)
-        
-        if not rotation_paused:
-            atom_positions = rotate_points(atom_positions, rotation_axis, np.radians(theta))
+        # Header bar
+        header_text = ""
+        if is_protein:
+            display_name = name or molecule_data.name or "Protein"
+            res_num = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
+            header_text = f" {display_name} ({res_num} res) [Style: {active_style.upper()} (B) | Color: {active_color.upper()} (C)] "
+        elif name:
+            header_text = f" {name} "
 
-        # Stretch to aspect ratio:
-        stretched_positions = atom_positions.copy()
-        stretched_positions[:, 1] /= canvas.aspect_ratio
+        if header_text:
+            if len(header_text) > canvas.char_width - 6:
+                header_text = header_text[:canvas.char_width - 10] + "... "
+            header_text = header_text.center(canvas.char_width, "=")
+            try:
+                stdscr.addstr(0, 0, header_text)
+            except curses.error:
+                pass
 
-        # Get 2D positions:
-        atom_positions_2D = [(pos[0], pos[1]) for pos in stretched_positions]
+        if is_protein:
+            # Rotate protein
+            if not rotation_paused:
+                R = rotation_matrix(rotation_axis, np.radians(theta))
+                for seg in segments:
+                    for pt in seg:
+                        pt.coord = np.dot(R, pt.coord)
+                for lig in ligands:
+                    lig.coord = np.dot(R, lig.coord)
 
-        canvas.clear()
-        canvas.draw_molecules(atom_positions_2D, atom_elements, atom_charges, bonds)
-        try:
-            stdscr.addstr(1, 0, str(canvas))
-        except curses.error:
-            pass  # Handle the error gracefully
+            # Project coordinates with aspect ratio
+            proj_segments = copy.deepcopy(segments)
+            for seg in proj_segments:
+                for pt in seg:
+                    pt.coord[1] /= protein_canvas.aspect_ratio
+
+            proj_ligands = copy.deepcopy(ligands)
+            for lig in proj_ligands:
+                lig.coord[1] /= protein_canvas.aspect_ratio
+
+            protein_canvas.clear()
+            protein_canvas.style = active_style
+            protein_canvas.color_mode = active_color
+            protein_canvas.draw_protein(proj_segments, proj_ligands)
+
+            # Render to curses buffer
+            for cy in range(min(protein_canvas.char_height, term_height - 2)):
+                for cx in range(min(protein_canvas.char_width, term_width - 1)):
+                    char = protein_canvas.data[cy][cx]
+                    if char == ' ':
+                        continue
+
+                    attr = curses.A_NORMAL
+                    if has_curses_colors and active_color != 'none':
+                        z = protein_canvas.z_buffer[cy, cx]
+                        if active_color == 'depth':
+                            if z > 0:
+                                attr = curses.color_pair(9) | curses.A_BOLD
+                            elif z > -15:
+                                attr = curses.color_pair(10)
+                            else:
+                                attr = curses.color_pair(11) | curses.A_DIM
+                        elif active_color == 'rainbow':
+                            color_rgb = protein_canvas.color_data[cy][cx]
+                            if color_rgb:
+                                r, g, b = color_rgb
+                                if b > r and b > g:
+                                    attr = curses.color_pair(4) | curses.A_BOLD
+                                elif g > r:
+                                    attr = curses.color_pair(6)
+                                else:
+                                    attr = curses.color_pair(8) | curses.A_BOLD
+                        elif active_color == 'ss':
+                            color_rgb = protein_canvas.color_data[cy][cx]
+                            if color_rgb:
+                                r, g, b = color_rgb
+                                if r > 180 and b > 180:
+                                    attr = curses.color_pair(1) | curses.A_BOLD  # Helix
+                                elif r > 180 and g > 150:
+                                    attr = curses.color_pair(2) | curses.A_BOLD  # Sheet
+                                else:
+                                    attr = curses.color_pair(3)                  # Loop
+
+                    try:
+                        stdscr.addstr(cy + 1, cx, char, attr)
+                    except curses.error:
+                        pass
+        else:
+            # Small molecule rotation
+            if not rotation_paused:
+                atom_positions = rotate_points(atom_positions, rotation_axis, np.radians(theta))
+
+            stretched_positions = atom_positions.copy()
+            stretched_positions[:, 1] /= canvas.aspect_ratio
+            atom_positions_2D = [(pos[0], pos[1]) for pos in stretched_positions]
+
+            canvas.clear()
+            canvas.draw_molecules(atom_positions_2D, atom_elements, atom_charges, bonds)
+            try:
+                stdscr.addstr(1, 0, str(canvas))
+            except curses.error:
+                pass
 
         stdscr.refresh()
-        
+
         key = stdscr.getch()
         if key != -1:
             if key == curses.KEY_RESIZE:
-                continue  # Ignore resize keypress
+                continue
             elif key in all_rotation_keys:
                 for key_list, axis in rotation_axis_map.items():
                     if key in key_list:
@@ -130,129 +315,118 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None, aut
             elif key == ord(' '):
                 rotation_paused = not rotation_paused
             elif key in [ord('R'), ord('r')]:
-                # Scale the molecule down (further away):
-                atom_positions *= 0.99
+                if is_protein:
+                    for seg in segments:
+                        for pt in seg:
+                            pt.coord *= 0.96
+                    for lig in ligands:
+                        lig.coord *= 0.96
+                else:
+                    atom_positions *= 0.98
             elif key in [ord('F'), ord('f')]:
-                # Scale the molecule up (closer):
-                atom_positions *= 1.01
+                if is_protein:
+                    for seg in segments:
+                        for pt in seg:
+                            pt.coord *= 1.04
+                    for lig in ligands:
+                        lig.coord *= 1.04
+                else:
+                    atom_positions *= 1.02
+            elif key in [ord('C'), ord('c')] and is_protein:
+                # Cycle color mode
+                idx = color_modes.index(active_color)
+                active_color = color_modes[(idx + 1) % len(color_modes)]
+            elif key in [ord('B'), ord('b')] and is_protein:
+                # Toggle style (ascii <-> braille)
+                idx = styles.index(active_style)
+                active_style = styles[(idx + 1) % len(styles)]
             else:
-                break  # Exit on any other key press
-
-        if timeout and time.time() > end_time:
-            # If we've paused using the spacebar, we don't want to exit on timeout
-            if not rotation_paused:
                 break
 
-def draw(input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None, stdscr=None, auto_resize=True):
-    '''
-    Main function for TerMol. This wraps the draw_persistent() function in a curses wrapper.
-    This is so the user can utilize the draw_persistent() function directly if they want to keep the curses window open between renders.
+        if timeout and time.time() > end_time and not rotation_paused:
+            break
+
+
+def draw(input_mol, name=None, width=80, height=40, three_d=True,
+         add_hydrogens=False, timeout=None, stdscr=None, auto_resize=True,
+         style='ascii', color='depth'):
+    """
+    Main function for TerMol. Renders small molecules or protein structures in 2D or 3D.
     Inputs:
-        input_mol: Either a SMILES string, file path to a .sdf or .mol file, or rdkit Mol.
-        name: Optional name for the molecule.
-        width: Width of the canvas in characters.'
-        height: Height of the canvas in characters.
-        three_d: Whether to show the molecule in 3D.
-        add_hydrogens: Whether to add hydrogens to the molecule.
-        timeout: Time in seconds to show the molecule. If None, the molecule will be shown indefinitely. Only applies for 3D viewing.
-        stdscr: The curses stdscr object. If None, the function will create a new curses window. This only needs to be used if you're keeping the curses Window between renders.
-    Returns:
-        None
-        Renders 2D or 3D ASCII art of the molecule.
-    '''
+        input_mol: SMILES string, .sdf/.mol/.pdb file path, or 4-letter RCSB PDB ID (e.g. '1ubq').
+        name: Optional title to display.
+        width: Canvas width in characters (default 80).
+        height: Canvas height in characters (default 40).
+        three_d: Whether to display interactive 3D viewer (default True).
+        style: For proteins: 'ascii' (default density ramp) or 'braille' (subpixel dots).
+        color: For proteins: 'depth' (default luminance ramp), 'rainbow' (N->C), 'ss' (secondary structure), or 'none'.
+    """
     if three_d:
-        curses.wrapper(draw_persistent, input_mol, name=name, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout, auto_resize=auto_resize)
+        curses.wrapper(draw_persistent, input_mol, name=name, width=width, height=height,
+                       three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
+                       auto_resize=auto_resize, style=style, color=color)
     else:
-        draw_persistent(None, input_mol, name=name, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout, auto_resize=auto_resize)
+        draw_persistent(None, input_mol, name=name, width=width, height=height,
+                        three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
+                        auto_resize=auto_resize, style=style, color=color)
 
-def draw_persistent(stdscr, input_mol, name=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None, auto_resize=True):
-    '''
-    Main function for TerMol:
-    Inputs:
-        stdscr: The curses stdscr object. Allows for a persistent window between molecules.
-        input_mol: Either a SMILES string,a file path to a .sdf or .mol file, or rdkit Mol.
-        name: Optional name for the molecule.
-        width: Width of the canvas in characters.'
-        height: Height of the canvas in characters.
-        three_d: Whether to show the molecule in 3D.
-        add_hydrogens: Whether to add hydrogens to the molecule.
-        timeout: Time in seconds to show the molecule. If None, the molecule will be shown indefinitely. Only applies for 3D viewing.
-        stdscr: The curses stdscr object. If None, the function will create a new curses window. This only needs to be used if you're keeping the curses Window between renders.
-        auto_resize: Whether to automatically resize the canvas to fit the terminal window. Only applies for 3D viewing.
-    Returns:
-        None
-        Renders 2D or 3D ASCII art of the molecule.
-    '''
 
-    # Get the molecule data:
+def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
+                    three_d=True, add_hydrogens=False, timeout=None,
+                    auto_resize=True, style='ascii', color='depth'):
+    """Persistent curses wrapper for draw."""
     molecule_data = get_molecule_data(input_mol, three_d=three_d, add_hydrogens=add_hydrogens)
+    canvas = MoleculeCanvas(width, height, float(width), float(height), aspect_ratio=2.0)
 
-    # Create a canvas:
-    # The canvas has a width and height in characters, and a width and height in Angstroms. Here, we're making them the same.
-    canvas = MoleculeCanvas(width, height, width*1, height*1, aspect_ratio=2.0)
-
-    # Show the molecule:
     if three_d:
         if stdscr:
-            show_molecule_3D(stdscr, molecule_data, canvas, name=name, timeout=timeout, auto_resize=auto_resize)
+            show_molecule_3D(stdscr, molecule_data, canvas, name=name, timeout=timeout,
+                             auto_resize=auto_resize, style=style, color=color)
         else:
-            curses.wrapper(show_molecule_3D, molecule_data, canvas, name=name, timeout=timeout, auto_resize=auto_resize) 
+            curses.wrapper(show_molecule_3D, molecule_data, canvas, name=name,
+                           timeout=timeout, auto_resize=auto_resize, style=style, color=color)
     else:
-        show_molecule_2D(molecule_data, canvas, name=name)
+        show_molecule_2D(molecule_data, canvas, name=name, style=style, color=color)
 
-def draw_multi(input_mols, names=None, width=80, height=40, three_d=True, add_hydrogens=False, timeout=None, auto_resize=True):
-    '''
-    Wraps termol.draw_persistent() to allow for multiple molecules to be rendered in sequence.
-    Inputs:
-        input_mols: A list of SMILES strings or file paths to .sdf or .mol files.
-        names: Optional names for the molecules. If None, the names will be the file names or "Molecule X" where X is the index.
-                If a list is provided, it must be the same length as the number of molecules.
-        width: Width of the canvas in characters.'
-        height: Height of the canvas in characters.
-        three_d: Whether to show the molecule in 3D.
-        add_hydrogens: Whether to add hydrogens to the molecule.
-        timeout: Time in seconds to show the molecule. If None, the molecule will be shown indefinitely. Only applies for 3D viewing.
-    Returns:
-        None
-        Renders 2D or 3D ASCII art of the molecules in sequence.
-    '''
 
+def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
+               add_hydrogens=False, timeout=None, auto_resize=True,
+               style='ascii', color='depth'):
+    """Render multiple molecules or proteins in sequence."""
     if names and len(names) != len(input_mols):
-        raise ValueError("The number of names must be the same as the number of molecules!")
-    
-    if names is None:
-        names = [f"Molecule {i+1}" for i in range(len(input_mols))] # 1-indexing for the biologists. Forgive me.
+        raise ValueError("The number of names must match the number of inputs!")
 
-    ### For 2D rendering, just loop:
+    if names is None:
+        names = []
+        for i, m in enumerate(input_mols):
+            if isinstance(m, str) and is_pdb_code(m):
+                names.append(clean_pdb_code(m))
+            elif isinstance(m, (str, Path)) and Path(m).exists():
+                names.append(Path(m).stem)
+            else:
+                names.append(f"Molecule {i + 1}")
+
     if not three_d:
         for i in range(len(input_mols)):
-            # choose a random molecule:
-            name = names[i]
-            molecule = input_mols[i]
-            draw(molecule, name=name, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens)
+            draw(input_mols[i], name=names[i], width=width, height=height,
+                 three_d=three_d, add_hydrogens=add_hydrogens, style=style, color=color)
         return
-    
-    ### For 3D rendering, create a persistent window, then loop using draw_persistent():
-    
-    def loop_molecules(stdscr, molecules, names, timeout=None):
+
+    def loop_molecules(stdscr, molecules, mol_names, loop_timeout=None):
         for i in range(len(molecules)):
-            name = names[i]
-            molecule = molecules[i]
-            
             try:
-                draw_persistent(stdscr, molecule, name=name, timeout=timeout, width=width, height=height, three_d=three_d, add_hydrogens=add_hydrogens, auto_resize=auto_resize)
-            except Exception as e:
-                if Exception == KeyboardInterrupt:
-                    break
-                print(f"Failed to render {name}")
+                draw_persistent(stdscr, molecules[i], name=mol_names[i], timeout=loop_timeout,
+                                width=width, height=height, three_d=three_d,
+                                add_hydrogens=add_hydrogens, auto_resize=auto_resize,
+                                style=style, color=color)
+            except Exception:
                 continue
-    
-    curses.wrapper(loop_molecules, input_mols, names, timeout=timeout)
+
+    curses.wrapper(loop_molecules, input_mols, names, loop_timeout=timeout)
+
 
 def showcase(timeout=5, width=80, height=40):
-    ### Run a showcase of the program ###
-
-    # Load CSV as dictionary:
+    """Showcase TerMol's capabilities with a random gallery."""
     smiles_dict = {}
     with pkg_resources.open_text(__package__, 'smiles_1000.csv') as file:
         lines = file.readlines()
@@ -262,7 +436,7 @@ def showcase(timeout=5, width=80, height=40):
                 continue
             name, smiles = split_line
             smiles_dict[name] = smiles
-    
+
     molecules = list(smiles_dict.values())
     names = list(smiles_dict.keys())
     draw_multi(molecules, names, width=width, height=height, timeout=timeout, auto_resize=True)

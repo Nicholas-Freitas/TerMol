@@ -39,15 +39,34 @@ Additional arguments include:
 - `--names`: The molecule names to be displayed (separated by spaces).
 - `--width, --height`: The size of the 'screen' (in number of characters) Default 80x40. In the 3D viewer, if width and height aren't specified, the viewer will resize to fill the terminal window.
 - `--show2D`: Display in 2D instead of 3D.
+- `--style`: For proteins: `ascii` (depth ramp, default) or `braille` (high-resolution subpixel curves).
+- `--color`: For proteins: `depth` (default luminance depth cueing), `rainbow` (N-to-C spectrum), `ss` (secondary structure: helices/sheets/loops), or `none`.
 - `--add_hydrogens`: Have RDKit attempt to add hydrogens automatically. Default False.
 - `--timeout`: In the 3D viewer, this will automatically close after this number of seconds. Default None, which allows the viewer to stay open indefinitely.
 
+### Protein & PDB Support
+TerMol now automatically recognizes macromolecular structures and proteins from `.pdb` files or 4-character RCSB PDB accession codes without any heavy external dependencies:
+
+```bash
+# Render Ubiquitin by RCSB code:
+termol 1ubq
+
+# Render a local PDB file in 2D with Braille and secondary structure colors:
+termol my_protein.pdb --show2D --style braille --color ss
+
+# Render in pure plain ASCII (ideal for logging or piping):
+termol 1crn --show2D --style ascii --color none > protein.log
+```
+
 ### Controlling the viewer
-In the 3D viewer, the molecule will initially rotate about the Y-axis. To change the direction of the rotation, use the arrow keys, or WASD+QE. To pause rotation, hit the spacebar.
+In the 3D viewer, the molecule or protein will initially rotate about the Y-axis.
+- **Rotate**: Arrow keys, or WASD + QE.
+- **Pause/Resume**: Spacebar.
+- **Zoom**: `F` (zoom in / closer), `R` (zoom out / further away).
+- **Toggle Protein Style**: Press `B` to toggle between **ASCII** density ramp and **Braille** subpixel curves.
+- **Cycle Protein Color**: Press `C` to cycle between **Depth** shading, **Rainbow** spectrum, **Secondary Structure** (`ss`), and plain text (`none`).
+- **Exit**: Hit any other key.
 
-To make the molecule smaller or larger, you can use the R and F keys, respectively.
-
-To exit the 3D viewer, hit any other key.
 
 ## Python Usage:
 
