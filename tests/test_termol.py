@@ -202,3 +202,76 @@ def test_protein_vertical_centering():
     canvas_mid = (canvas.char_height - 1) / 2.0
     # Center of content should be within 2.5 rows of the canvas midpoint
     assert abs(mid_row - canvas_mid) <= 2.5
+
+
+def test_representation_switch_pose_preservation():
+    """Verify that switching representation preserves rotated pose and zoom."""
+    import copy
+    from termol.utilities import get_molecule_data
+    from termol.render import scale_protein_for_canvas, rotation_matrix
+    from termol.canvas import ProteinCanvas
+    from termol.backbone import generate_backbone_points
+
+    data = get_molecule_data("1ubq", three_d=True, representation='trace')
+    canvas = ProteinCanvas(80, 40, 80, 40, aspect_ratio=2.0)
+
+    # Initial scaling
+    initial_segs = copy.deepcopy(data.backbone_segments)
+    protein_scale = scale_protein_for_canvas(initial_segs, data.ligands, canvas)
+
+    canonical_cache = {'trace': initial_segs}
+    cum_R = np.eye(3)
+    zoom_scale = 1.0
+
+    def get_segs(target_rep):
+        if target_rep not in canonical_cache:
+            raw_segs = generate_backbone_points(data.structure, samples_per_res=8, representation=target_rep)
+            for seg in raw_segs:
+                for pt in seg:
+                    pt.coord *= protein_scale
+                    if pt.left_coord is not None:
+                        pt.left_coord *= protein_scale
+                        pt.right_coord *= protein_scale
+                    if pt.top_coord is not None:
+                        pt.top_coord *= protein_scale
+                        pt.bottom_coord *= protein_scale
+            canonical_cache[target_rep] = raw_segs
+
+        target_segs = copy.deepcopy(canonical_cache[target_rep])
+        for seg in target_segs:
+            for pt in seg:
+                pt.coord = np.dot(cum_R, pt.coord * zoom_scale)
+                if pt.left_coord is not None:
+                    pt.left_coord = np.dot(cum_R, pt.left_coord * zoom_scale)
+                    pt.right_coord = np.dot(cum_R, pt.right_coord * zoom_scale)
+                if pt.top_coord is not None:
+                    pt.top_coord = np.dot(cum_R, pt.top_coord * zoom_scale)
+                    pt.bottom_coord = np.dot(cum_R, pt.bottom_coord * zoom_scale)
+        return target_segs
+
+    segments = get_segs('trace')
+
+    # Rotate 25 frames and zoom
+    R = rotation_matrix((0, 1, 0), np.radians(2.0))
+    for _ in range(25):
+        cum_R = np.dot(R, cum_R)
+        for s in segments:
+            for pt in s:
+                pt.coord = np.dot(R, pt.coord)
+
+    zoom_scale *= 1.15
+    for s in segments:
+        for pt in s:
+            pt.coord *= 1.15
+
+    # Switch to cartoon
+    cartoon_segs = get_segs('cartoon')
+
+    # Start and mid C-alpha coordinates must match between rotated trace and cartoon
+    assert np.allclose(segments[0][0].coord, cartoon_segs[0][0].coord, atol=1e-5)
+    assert np.allclose(segments[0][100].coord, cartoon_segs[0][100].coord, atol=1e-5)
+
+    # Switch to tube
+    tube_segs = get_segs('tube')
+    assert np.allclose(segments[0][0].coord, tube_segs[0][0].coord, atol=1e-5)
+    assert np.allclose(segments[0][100].coord, tube_segs[0][100].coord, atol=1e-5)

@@ -69,42 +69,27 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False, representati
         try:
             structure = load_pdb(str(input_mol))
             if structure.is_protein:
-                # Generate Catmull-Rom backbone splines with requested representation
-                backbone_segments = generate_backbone_points(
-                    structure, samples_per_res=8, representation=representation
-                )
-                ligands = structure.ligands
-
-                # Extract all coordinates to center and PCA-align
+                # Extract all coordinates to center and PCA-align structure
                 all_coords_list = []
-                for seg in backbone_segments:
-                    for pt in seg:
-                        all_coords_list.append(pt.coord)
-                        if pt.left_coord is not None:
-                            all_coords_list.append(pt.left_coord)
-                            all_coords_list.append(pt.right_coord)
-                        if pt.top_coord is not None:
-                            all_coords_list.append(pt.top_coord)
-                            all_coords_list.append(pt.bottom_coord)
-                if ligands:
-                    for lig in ligands:
-                        all_coords_list.append(lig.coord)
+                for ch in structure.chains.values():
+                    for res in ch:
+                        all_coords_list.append(res.coord)
+                        if res.o_coord is not None:
+                            all_coords_list.append(res.o_coord)
+                for lig in structure.ligands:
+                    all_coords_list.append(lig.coord)
 
                 if all_coords_list:
                     all_coords = np.array(all_coords_list)
                     center = np.mean(all_coords, axis=0)
 
-                    # Center all points around (0, 0, 0)
-                    for seg in backbone_segments:
-                        for pt in seg:
-                            pt.coord = pt.coord - center
-                            if pt.left_coord is not None:
-                                pt.left_coord = pt.left_coord - center
-                                pt.right_coord = pt.right_coord - center
-                            if pt.top_coord is not None:
-                                pt.top_coord = pt.top_coord - center
-                                pt.bottom_coord = pt.bottom_coord - center
-                    for lig in ligands:
+                    # Center all residue and ligand coordinates in structure
+                    for ch in structure.chains.values():
+                        for res in ch:
+                            res.coord = res.coord - center
+                            if res.o_coord is not None:
+                                res.o_coord = res.o_coord - center
+                    for lig in structure.ligands:
                         lig.coord = lig.coord - center
 
                     if three_d:
@@ -114,23 +99,20 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False, representati
                         eigvals, eigvecs = np.linalg.eigh(cov)
                         rot = eigvecs[:, np.argsort(eigvals)[::-1]]
 
-                        for seg in backbone_segments:
-                            for pt in seg:
-                                pt.coord = np.dot(pt.coord, rot)
-                                if pt.left_coord is not None:
-                                    pt.left_coord = np.dot(pt.left_coord, rot)
-                                    pt.right_coord = np.dot(pt.right_coord, rot)
-                                if pt.top_coord is not None:
-                                    pt.top_coord = np.dot(pt.top_coord, rot)
-                                    pt.bottom_coord = np.dot(pt.bottom_coord, rot)
-                        for lig in ligands:
+                        for ch in structure.chains.values():
+                            for res in ch:
+                                res.coord = np.dot(res.coord, rot)
+                                if res.o_coord is not None:
+                                    res.o_coord = np.dot(res.o_coord, rot)
+                        for lig in structure.ligands:
                             lig.coord = np.dot(lig.coord, rot)
 
+                # Generate Catmull-Rom backbone splines from centered & PCA-aligned structure
+                backbone_segments = generate_backbone_points(
+                    structure, samples_per_res=8, representation=representation
+                )
+                ligands = structure.ligands
                 ca_coords = structure.all_ca_coords
-                if len(ca_coords) > 0 and all_coords_list:
-                    ca_coords = ca_coords - center
-                    if three_d:
-                        ca_coords = np.dot(ca_coords, rot)
 
                 return MoleculeData(
                     is_protein=True,

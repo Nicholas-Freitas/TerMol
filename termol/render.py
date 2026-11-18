@@ -17,7 +17,7 @@ from .backbone import BackbonePoint, generate_backbone_points
 from .pdb import is_pdb_code, clean_pdb_code
 
 
-def scale_protein_for_canvas(backbone_segments: List[List[BackbonePoint]], ligands: list, canvas: Canvas):
+def scale_protein_for_canvas(backbone_segments: List[List[BackbonePoint]], ligands: list, canvas: Canvas) -> float:
     """Scale and center protein backbone segments and ligands to fit canvas dimensions."""
     all_pts = []
     for seg in backbone_segments:
@@ -33,7 +33,7 @@ def scale_protein_for_canvas(backbone_segments: List[List[BackbonePoint]], ligan
         all_pts.append(lig.coord)
 
     if not all_pts:
-        return
+        return 1.0
 
     coords = np.array(all_pts)
     min_x, max_x = np.min(coords[:, 0]), np.max(coords[:, 0])
@@ -57,6 +57,8 @@ def scale_protein_for_canvas(backbone_segments: List[List[BackbonePoint]], ligan
                 pt.bottom_coord *= scale
     for lig in ligands:
         lig.coord *= scale
+
+    return float(scale)
 
 
 def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='depth', rep='trace'):
@@ -84,16 +86,6 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='dep
         # If representation differs from molecule_data's precomputed segments, regenerate
         if active_rep != getattr(molecule_data, 'representation', 'trace') and molecule_data.structure:
             segments = generate_backbone_points(molecule_data.structure, samples_per_res=8, representation=active_rep)
-            center = np.mean([pt.coord for seg in segments for pt in seg], axis=0)
-            for seg in segments:
-                for pt in seg:
-                    pt.coord -= center
-                    if pt.left_coord is not None:
-                        pt.left_coord -= center
-                        pt.right_coord -= center
-                    if pt.top_coord is not None:
-                        pt.top_coord -= center
-                        pt.bottom_coord -= center
         else:
             segments = copy.deepcopy(molecule_data.backbone_segments)
 
@@ -194,26 +186,46 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
             style=active_style, color_mode=active_color
         )
 
-        def build_segments(target_rep):
-            if target_rep == getattr(molecule_data, 'representation', 'trace'):
-                segs = copy.deepcopy(molecule_data.backbone_segments)
-            else:
-                segs = generate_backbone_points(molecule_data.structure, samples_per_res=8, representation=target_rep)
-                center = np.mean([pt.coord for s in segs for pt in s], axis=0)
-                for s in segs:
-                    for pt in s:
-                        pt.coord -= center
-                        if pt.left_coord is not None:
-                            pt.left_coord -= center
-                            pt.right_coord -= center
-                        if pt.top_coord is not None:
-                            pt.top_coord -= center
-                            pt.bottom_coord -= center
-            scale_protein_for_canvas(segs, ligands, protein_canvas)
-            return segs
-
+        initial_rep = active_rep
         ligands = copy.deepcopy(molecule_data.ligands)
-        segments = build_segments(active_rep)
+        canonical_cache = {}
+
+        # Scale initial representation and ligands once to fit canvas
+        initial_segs = copy.deepcopy(molecule_data.backbone_segments)
+        protein_scale = scale_protein_for_canvas(initial_segs, ligands, protein_canvas)
+        canonical_cache[initial_rep] = initial_segs
+
+        # Track cumulative interactive rotation matrix and zoom factor
+        cum_R = np.eye(3)
+        zoom_scale = 1.0
+
+        def get_segments(target_rep):
+            if target_rep not in canonical_cache:
+                raw_segs = generate_backbone_points(molecule_data.structure, samples_per_res=8, representation=target_rep)
+                for seg in raw_segs:
+                    for pt in seg:
+                        pt.coord *= protein_scale
+                        if pt.left_coord is not None:
+                            pt.left_coord *= protein_scale
+                            pt.right_coord *= protein_scale
+                        if pt.top_coord is not None:
+                            pt.top_coord *= protein_scale
+                            pt.bottom_coord *= protein_scale
+                canonical_cache[target_rep] = raw_segs
+
+            target_segs = copy.deepcopy(canonical_cache[target_rep])
+            for seg in target_segs:
+                for pt in seg:
+                    pt.coord = np.dot(cum_R, pt.coord * zoom_scale)
+                    if pt.left_coord is not None:
+                        pt.left_coord = np.dot(cum_R, pt.left_coord * zoom_scale)
+                        pt.right_coord = np.dot(cum_R, pt.right_coord * zoom_scale)
+                    if pt.top_coord is not None:
+                        pt.top_coord = np.dot(cum_R, pt.top_coord * zoom_scale)
+                        pt.bottom_coord = np.dot(cum_R, pt.bottom_coord * zoom_scale)
+            return target_segs
+
+        segments = get_segments(active_rep)
     else:
         atom_positions, atom_elements, atom_charges, bonds = molecule_data
         atom_positions = atom_positions.copy()
@@ -267,6 +279,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
             # Rotate protein
             if not rotation_paused:
                 R = rotation_matrix(rotation_axis, np.radians(theta))
+                cum_R = np.dot(R, cum_R)
                 for seg in segments:
                     for pt in seg:
                         pt.coord = np.dot(R, pt.coord)
@@ -357,6 +370,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
                 rotation_paused = not rotation_paused
             elif key in [ord('R'), ord('r')]:
                 if is_protein:
+                    zoom_scale *= 0.96
                     for seg in segments:
                         for pt in seg:
                             pt.coord *= 0.96
@@ -372,6 +386,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
                     atom_positions *= 0.98
             elif key in [ord('F'), ord('f')]:
                 if is_protein:
+                    zoom_scale *= 1.04
                     for seg in segments:
                         for pt in seg:
                             pt.coord *= 1.04
@@ -389,7 +404,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
                 # Cycle representation mode (trace -> cartoon -> tube)
                 idx = rep_modes.index(active_rep) if active_rep in rep_modes else 0
                 active_rep = rep_modes[(idx + 1) % len(rep_modes)]
-                segments = build_segments(active_rep)
+                segments = get_segments(active_rep)
             elif key in [ord('C'), ord('c')] and is_protein:
                 # Cycle color mode
                 idx = color_modes.index(active_color)
