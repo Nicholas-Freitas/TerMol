@@ -20,7 +20,7 @@ def termol_cli():
     parser.add_argument('--timeout', type=int, default=None, help='3D window will close after this number of seconds (default indefinitely).')
     parser.add_argument(
         '--style', default=None,
-        help='Rendering style: for small molecules: "high-res" (default in 2D), "symbols" (default in 3D), or "balls"; '
+        help='Rendering style: for small molecules: "high-res" (default), "symbols", or "balls"; '
              'for proteins: "high-res" (default) or "ascii".'
     )
     parser.add_argument(
@@ -108,7 +108,7 @@ def termol_cli():
 
     if args.rep is None:
         args.rep = 'trace' if three_d else 'cartoon'
-    if args.style is None and not three_d:
+    if args.style is None:
         args.style = 'high-res'
 
     draw_multi(

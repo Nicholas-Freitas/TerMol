@@ -174,12 +174,12 @@ DEFAULT_ATOM_COLOR = (200, 200, 200)
 
 class MoleculeCanvas(Canvas):
     def __init__(self, char_width: int, char_height: int, width: float, height: float,
-                 aspect_ratio: float = 2.0, style: str = 'symbols', color_mode: str = 'cpk'):
+                 aspect_ratio: float = 2.0, style: str = 'high-res', color_mode: str = 'cpk'):
         super().__init__(char_width, char_height, width, height, aspect_ratio)
         if style and style.lower() in ('high-res', 'highres', 'hires', 'braille', 'subpixel'):
             self.style = 'high-res'
         else:
-            self.style = style.lower() if style else 'symbols'
+            self.style = style.lower() if style else 'high-res'
         self.color_mode = color_mode.lower() if color_mode else 'cpk'
         self.bond_spacing = 3.0
 

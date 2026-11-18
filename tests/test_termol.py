@@ -397,7 +397,7 @@ def test_molecule_canvas_cpk_colors_and_depth_cueing():
     """Verify CPK element coloring and Z-depth cueing in MoleculeCanvas."""
     from termol.canvas import MoleculeCanvas, CPK_COLORS
 
-    canvas = MoleculeCanvas(40, 20, 40.0, 20.0, aspect_ratio=2.0)
+    canvas = MoleculeCanvas(40, 20, 40.0, 20.0, aspect_ratio=2.0, style='symbols')
     # 2 atoms: Oxygen at foreground (z=+5), Carbon at background (z=-5)
     positions = [(0.0, 0.0, 5.0), (10.0, 0.0, -5.0)]
     elements = ['O', 'C']
@@ -536,7 +536,7 @@ def test_bond_orders_and_aromaticity_rendering():
     """Verify single, double, triple, and aromatic bond characters."""
     from termol.canvas import MoleculeCanvas
 
-    canvas = MoleculeCanvas(40, 20, 40.0, 20.0, aspect_ratio=2.0)
+    canvas = MoleculeCanvas(40, 20, 40.0, 20.0, aspect_ratio=2.0, style='symbols')
     # Triple bond (order=3.0) horizontally between (0, 0) and (10, 0)
     # Double bond (order=2.0) vertically between (0, 2) and (0, 8)
     # Aromatic bond (order=1.5) horizontally between (15, 0) and (25, 0)
@@ -645,6 +645,32 @@ def test_protein_2d_default_cartoon_and_high_res(capsys):
     captured = capsys.readouterr().out
     assert "CARTOON" in captured
     assert "HIGH-RES" in captured
+
+
+def test_small_molecule_3d_default_high_res(capsys):
+    """Verify small molecule 3D interactive mode defaults to high-res."""
+    from termol.render import draw_persistent
+
+    # Render small molecule with very short timeout so it exits immediately
+    draw_persistent(None, "CC(=O)O", name="Aspirin", timeout=0.05, backend='ansi')
+    captured = capsys.readouterr().out
+    assert "HIGH-RES" in captured
+    assert "CPK" in captured
+
+
+def test_draw_multi_no_duplicate_window_on_exit(monkeypatch):
+    """Verify draw_multi calls draw_persistent exactly once per molecule (no duplicate loop)."""
+    from termol import render
+
+    call_count = 0
+    def mock_draw_persistent(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+
+    monkeypatch.setattr(render, 'draw_persistent', mock_draw_persistent)
+    render.draw_multi(["CC(=O)O"], backend='ansi')
+    assert call_count == 1
+
 
 
 
