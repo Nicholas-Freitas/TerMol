@@ -1,7 +1,10 @@
 # termol/render.py
 import sys
+import os
+import re
 import copy
 import time
+import ctypes
 import numpy as np
 import curses
 from pathlib import Path
@@ -570,9 +573,461 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
             break
 
 
+MOUSE_SGR_PATTERN = re.compile(r'\x1b\[<(\d+);(\d+);(\d+)([Mm])')
+
+
+class AnsiTerminalSession:
+    """Context manager for full-screen ANSI terminal session with SGR mouse and raw input."""
+
+    def __init__(self):
+        self.h_out = None
+        self.h_in = None
+        self.orig_out_mode = None
+        self.orig_in_mode = None
+        self.orig_termios = None
+
+    def __enter__(self):
+        if hasattr(sys.stdout, 'reconfigure'):
+            try:
+                sys.stdout.reconfigure(encoding='utf-8')
+            except Exception:
+                pass
+
+        if sys.platform == 'win32':
+            try:
+                kernel32 = ctypes.windll.kernel32
+                h_out = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+                h_in = kernel32.GetStdHandle(-10)   # STD_INPUT_HANDLE
+                out_m = ctypes.c_ulong()
+                in_m = ctypes.c_ulong()
+                if kernel32.GetConsoleMode(h_out, ctypes.byref(out_m)):
+                    self.h_out = h_out
+                    self.orig_out_mode = out_m.value
+                    # ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+                    kernel32.SetConsoleMode(h_out, self.orig_out_mode | 0x0004 | 0x0008)
+                if kernel32.GetConsoleMode(h_in, ctypes.byref(in_m)):
+                    self.h_in = h_in
+                    self.orig_in_mode = in_m.value
+                    # ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200, ENABLE_WINDOW_INPUT = 0x0010, ENABLE_EXTENDED_FLAGS = 0x0080
+                    # Clear ENABLE_QUICK_EDIT_MODE (0x0040) so mouse clicks are not intercepted for text selection
+                    new_in = (self.orig_in_mode | 0x0200 | 0x0010 | 0x0080) & ~0x0040
+                    kernel32.SetConsoleMode(h_in, new_in)
+            except Exception:
+                pass
+        else:
+            try:
+                import termios
+                import tty
+                self.orig_termios = termios.tcgetattr(sys.stdin)
+                tty.setcbreak(sys.stdin.fileno())
+            except Exception:
+                pass
+
+        # Switch to alternate screen, hide cursor, clear, enable mouse tracking
+        # \033[?1049h: Alternate screen buffer
+        # \033[?25l: Hide cursor
+        # \033[2J\033[H: Clear screen & move cursor to top-left
+        # \033[?1000h: Normal mouse tracking
+        # \033[?1002h: Button-motion tracking (reports movement when dragging)
+        # \033[?1006h: SGR extended coordinates mode
+        try:
+            sys.stdout.write("\033[?1049h\033[?25l\033[2J\033[H\033[?1000h\033[?1002h\033[?1006h")
+            sys.stdout.flush()
+        except Exception:
+            pass
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Disable mouse tracking, show cursor, switch back to main screen buffer
+        try:
+            sys.stdout.write("\033[?1006l\033[?1002l\033[?1000l\033[?25h\033[?1049l")
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+        if sys.platform == 'win32':
+            try:
+                if self.h_out is not None and self.orig_out_mode is not None:
+                    ctypes.windll.kernel32.SetConsoleMode(self.h_out, self.orig_out_mode)
+                if self.h_in is not None and self.orig_in_mode is not None:
+                    ctypes.windll.kernel32.SetConsoleMode(self.h_in, self.orig_in_mode)
+            except Exception:
+                pass
+        else:
+            try:
+                if self.orig_termios is not None:
+                    import termios
+                    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.orig_termios)
+            except Exception:
+                pass
+
+
+def read_available_input() -> str:
+    """Read any pending characters from stdin non-blockingly."""
+    chars = []
+    if sys.platform == 'win32':
+        import msvcrt
+        try:
+            while msvcrt.kbhit():
+                c = msvcrt.getwch()
+                if c in ('\x00', '\xe0') and msvcrt.kbhit():
+                    code = msvcrt.getwch()
+                    if code == 'H':
+                        chars.append('\x1b[A')
+                    elif code == 'P':
+                        chars.append('\x1b[B')
+                    elif code == 'M':
+                        chars.append('\x1b[C')
+                    elif code == 'K':
+                        chars.append('\x1b[D')
+                else:
+                    chars.append(c)
+            if chars and chars[-1] == '\x1b':
+                time.sleep(0.003)
+                while msvcrt.kbhit():
+                    chars.append(msvcrt.getwch())
+        except Exception:
+            pass
+    else:
+        import select
+        try:
+            while select.select([sys.stdin], [], [], 0)[0]:
+                c = sys.stdin.read(1)
+                chars.append(c)
+            if chars and chars[-1] == '\x1b':
+                time.sleep(0.003)
+                while select.select([sys.stdin], [], [], 0)[0]:
+                    chars.append(sys.stdin.read(1))
+        except Exception:
+            pass
+    return "".join(chars)
+
+
+def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
+                          auto_resize=True, style='braille', color='depth', rep='trace'):
+    """
+    Interactive 3D TrueColor ANSI renderer with mouse click-drag rotation and scroll zoom.
+    Directly streams 24-bit RGB ANSI escape sequences, completely bypassing curses.
+    """
+    is_protein = isinstance(molecule_data, MoleculeData) and molecule_data.is_protein
+
+    try:
+        ts = os.get_terminal_size()
+        term_width, term_height = ts.columns, ts.lines
+    except Exception:
+        term_width, term_height = canvas.char_width, canvas.char_height
+
+    if auto_resize:
+        canvas.resize_canvas(term_width, max(10, term_height - 2))
+
+    if is_protein:
+        active_style = style
+        active_color = color
+        if active_color == 'depth':
+            active_color = 'depth1'
+        active_rep = rep or getattr(molecule_data, 'representation', 'trace')
+        if active_rep not in ('trace', 'cartoon', 'tube'):
+            active_rep = 'cartoon' if active_rep == 'ribbon' else 'trace'
+
+        color_modes = ['depth1', 'depth2', 'depth3', 'rainbow', 'ss', 'none']
+        styles = ['ascii', 'braille']
+        rep_modes = ['trace', 'cartoon', 'tube']
+
+        protein_canvas = ProteinCanvas(
+            canvas.char_width, canvas.char_height,
+            canvas.width, canvas.height,
+            aspect_ratio=canvas.aspect_ratio,
+            style=active_style, color_mode=active_color
+        )
+
+        initial_rep = active_rep
+        ligands = copy.deepcopy(molecule_data.ligands)
+        canonical_cache = {}
+
+        # Scale initial representation and ligands once to fit canvas
+        initial_segs = copy.deepcopy(molecule_data.backbone_segments)
+        protein_scale = scale_protein_for_canvas(initial_segs, ligands, protein_canvas)
+        canonical_cache[initial_rep] = initial_segs
+
+        # Track cumulative interactive rotation matrix and zoom factor
+        cum_R = np.eye(3)
+        zoom_scale = 1.0
+
+        def get_segments(target_rep):
+            if target_rep not in canonical_cache:
+                raw_segs = generate_backbone_points(molecule_data.structure, samples_per_res=8, representation=target_rep)
+                for seg in raw_segs:
+                    for pt in seg:
+                        pt.coord *= protein_scale
+                        if pt.left_coord is not None:
+                            pt.left_coord *= protein_scale
+                            pt.right_coord *= protein_scale
+                        if pt.top_coord is not None:
+                            pt.top_coord *= protein_scale
+                            pt.bottom_coord *= protein_scale
+                canonical_cache[target_rep] = raw_segs
+
+            target_segs = copy.deepcopy(canonical_cache[target_rep])
+            for seg in target_segs:
+                for pt in seg:
+                    pt.coord = np.dot(cum_R, pt.coord * zoom_scale)
+                    if pt.left_coord is not None:
+                        pt.left_coord = np.dot(cum_R, pt.left_coord * zoom_scale)
+                        pt.right_coord = np.dot(cum_R, pt.right_coord * zoom_scale)
+                    if pt.top_coord is not None:
+                        pt.top_coord = np.dot(cum_R, pt.top_coord * zoom_scale)
+                        pt.bottom_coord = np.dot(cum_R, pt.bottom_coord * zoom_scale)
+            return target_segs
+
+        def apply_protein_zoom(factor: float):
+            nonlocal zoom_scale
+            zoom_scale *= factor
+            for seg in segments:
+                for pt in seg:
+                    pt.coord *= factor
+                    if pt.left_coord is not None:
+                        pt.left_coord *= factor
+                        pt.right_coord *= factor
+                    if pt.top_coord is not None:
+                        pt.top_coord *= factor
+                        pt.bottom_coord *= factor
+            for lig in ligands:
+                lig.coord *= factor
+
+        def apply_protein_rotation_delta(dx: float, dy: float):
+            nonlocal cum_R
+            if dx == 0 and dy == 0:
+                return
+            ang_y = dx * 0.04
+            ang_x = -dy * 0.06
+            Ry = rotation_matrix((0, 1, 0), ang_y)
+            Rx = rotation_matrix((1, 0, 0), ang_x)
+            R_comb = np.dot(Rx, Ry)
+            cum_R = np.dot(R_comb, cum_R)
+            for seg in segments:
+                for pt in seg:
+                    pt.coord = np.dot(R_comb, pt.coord)
+                    if pt.left_coord is not None:
+                        pt.left_coord = np.dot(R_comb, pt.left_coord)
+                        pt.right_coord = np.dot(R_comb, pt.right_coord)
+                    if pt.top_coord is not None:
+                        pt.top_coord = np.dot(R_comb, pt.top_coord)
+                        pt.bottom_coord = np.dot(R_comb, pt.bottom_coord)
+            for lig in ligands:
+                lig.coord = np.dot(R_comb, lig.coord)
+
+        segments = get_segments(active_rep)
+    else:
+        atom_positions, atom_elements, atom_charges, bonds = molecule_data
+        atom_positions = atom_positions.copy()
+        atom_positions = scale_for_canvas(atom_positions, canvas)
+
+        def apply_mol_zoom(factor: float):
+            nonlocal atom_positions
+            atom_positions *= factor
+
+        def apply_mol_rotation_delta(dx: float, dy: float):
+            nonlocal atom_positions
+            if dx == 0 and dy == 0:
+                return
+            ang_y = dx * 0.04
+            ang_x = -dy * 0.06
+            Ry = rotation_matrix((0, 1, 0), ang_y)
+            Rx = rotation_matrix((1, 0, 0), ang_x)
+            R_comb = np.dot(Rx, Ry)
+            atom_positions = np.dot(atom_positions, R_comb.T)
+
+    end_time = time.time() + timeout if timeout else None
+    rotation_axis = (0, 1, 0)
+    rotation_paused = False
+    theta = 1.2
+    dragging = False
+    last_mouse_pos = None
+
+    with AnsiTerminalSession():
+        while True:
+            # Check terminal size
+            if auto_resize:
+                try:
+                    curr_ts = os.get_terminal_size()
+                    cw, ch = curr_ts.columns, curr_ts.lines
+                    if cw != term_width or ch != term_height:
+                        term_width, term_height = cw, ch
+                        canvas.resize_canvas(term_width, max(10, term_height - 2))
+                        if is_protein:
+                            protein_canvas.resize_canvas(term_width, max(10, term_height - 2))
+                        sys.stdout.write("\033[2J")
+                except Exception:
+                    pass
+
+            if is_protein:
+                # Rotate protein if auto-spinning and not actively dragging
+                if not rotation_paused and not dragging:
+                    R = rotation_matrix(rotation_axis, np.radians(theta))
+                    cum_R = np.dot(R, cum_R)
+                    for seg in segments:
+                        for pt in seg:
+                            pt.coord = np.dot(R, pt.coord)
+                            if pt.left_coord is not None:
+                                pt.left_coord = np.dot(R, pt.left_coord)
+                                pt.right_coord = np.dot(R, pt.right_coord)
+                            if pt.top_coord is not None:
+                                pt.top_coord = np.dot(R, pt.top_coord)
+                                pt.bottom_coord = np.dot(R, pt.bottom_coord)
+                    for lig in ligands:
+                        lig.coord = np.dot(R, lig.coord)
+
+                protein_canvas.clear()
+                protein_canvas.style = active_style
+                protein_canvas.color_mode = active_color
+                protein_canvas.draw_protein(segments, ligands)
+
+                display_name = name or molecule_data.name or "Protein"
+                res_num = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
+                header_text = f" {display_name} ({res_num} res) [{active_rep.upper()} (M) | {active_style.upper()} (B) | {active_color.upper()} (C) | Drag: rotate | Scroll: zoom] "
+                if len(header_text) > protein_canvas.char_width - 6:
+                    header_text = f" {display_name} [{active_rep.upper()} | {active_style.upper()} | {active_color.upper()}] "
+                if len(header_text) > protein_canvas.char_width - 6:
+                    header_text = header_text[:protein_canvas.char_width - 10] + "... "
+                header_line = header_text.center(protein_canvas.char_width, "=")
+
+                if active_color == 'none':
+                    body = protein_canvas.render_plain()
+                else:
+                    body = protein_canvas.render_ansi()
+
+                frame = f"\033[H\033[1;36m{header_line}\033[0m\n{body}"
+                sys.stdout.write(frame)
+                sys.stdout.flush()
+            else:
+                # Small molecule
+                if not rotation_paused and not dragging:
+                    atom_positions = rotate_points(atom_positions, rotation_axis, np.radians(theta))
+
+                stretched = atom_positions.copy()
+                stretched[:, 1] /= canvas.aspect_ratio
+                positions_2D = [(p[0], p[1]) for p in stretched]
+
+                canvas.clear()
+                canvas.draw_molecules(positions_2D, atom_elements, atom_charges, bonds)
+
+                display_name = name or "Molecule"
+                header_text = f" {display_name} [Small Mol | Drag: rotate | Scroll: zoom] "
+                if len(header_text) > canvas.char_width - 6:
+                    header_text = header_text[:canvas.char_width - 10] + "... "
+                header_line = header_text.center(canvas.char_width, "=")
+                body = str(canvas)
+
+                frame = f"\033[H\033[1;36m{header_line}\033[0m\n{body}"
+                sys.stdout.write(frame)
+                sys.stdout.flush()
+
+            # Non-blocking input loop
+            time.sleep(0.025)
+            raw_input = read_available_input()
+            if raw_input:
+                # 1. Parse mouse events
+                total_dx = 0
+                total_dy = 0
+                for m in MOUSE_SGR_PATTERN.finditer(raw_input):
+                    btn = int(m.group(1))
+                    col = int(m.group(2))
+                    row = int(m.group(3))
+                    act = m.group(4)
+
+                    if act == 'M':
+                        if btn == 0:
+                            dragging = True
+                            last_mouse_pos = (col, row)
+                            rotation_paused = True
+                        elif btn == 32 and dragging and last_mouse_pos is not None:
+                            total_dx += (col - last_mouse_pos[0])
+                            total_dy += (row - last_mouse_pos[1])
+                            last_mouse_pos = (col, row)
+                        elif btn == 64:
+                            if is_protein:
+                                apply_protein_zoom(1.05)
+                            else:
+                                apply_mol_zoom(1.05)
+                        elif btn == 65:
+                            if is_protein:
+                                apply_protein_zoom(0.95)
+                            else:
+                                apply_mol_zoom(0.95)
+                    elif act == 'm' and btn == 0:
+                        dragging = False
+                        last_mouse_pos = None
+
+                if total_dx != 0 or total_dy != 0:
+                    if is_protein:
+                        apply_protein_rotation_delta(total_dx, total_dy)
+                    else:
+                        apply_mol_rotation_delta(total_dx, total_dy)
+
+                # 2. Parse keyboard events
+                key_input = MOUSE_SGR_PATTERN.sub('', raw_input)
+                if key_input:
+                    if '\x1b[A' in key_input:
+                        rotation_axis = (1, 0, 0)
+                        rotation_paused = False
+                    elif '\x1b[B' in key_input:
+                        rotation_axis = (-1, 0, 0)
+                        rotation_paused = False
+                    elif '\x1b[C' in key_input:
+                        rotation_axis = (0, -1, 0)
+                        rotation_paused = False
+                    elif '\x1b[D' in key_input:
+                        rotation_axis = (0, 1, 0)
+                        rotation_paused = False
+
+                    for ch in key_input:
+                        if ch in ('q', 'Q', 'x', 'X', '\x1b'):
+                            return
+                        elif ch == ' ':
+                            rotation_paused = not rotation_paused
+                        elif ch in ('a', 'A'):
+                            rotation_axis = (0, 1, 0)
+                            rotation_paused = False
+                        elif ch in ('d', 'D'):
+                            rotation_axis = (0, -1, 0)
+                            rotation_paused = False
+                        elif ch in ('w', 'W'):
+                            rotation_axis = (1, 0, 0)
+                            rotation_paused = False
+                        elif ch in ('s', 'S'):
+                            rotation_axis = (-1, 0, 0)
+                            rotation_paused = False
+                        elif ch in ('e', 'E'):
+                            rotation_axis = (0, 0, 1)
+                            rotation_paused = False
+                        elif ch in ('r', 'R'):
+                            if is_protein:
+                                apply_protein_zoom(0.96)
+                            else:
+                                apply_mol_zoom(0.96)
+                        elif ch in ('f', 'F'):
+                            if is_protein:
+                                apply_protein_zoom(1.04)
+                            else:
+                                apply_mol_zoom(1.04)
+                        elif ch in ('m', 'M') and is_protein:
+                            idx = rep_modes.index(active_rep) if active_rep in rep_modes else 0
+                            active_rep = rep_modes[(idx + 1) % len(rep_modes)]
+                            segments = get_segments(active_rep)
+                        elif ch in ('c', 'C') and is_protein:
+                            idx = color_modes.index(active_color)
+                            active_color = color_modes[(idx + 1) % len(color_modes)]
+                        elif ch in ('b', 'B') and is_protein:
+                            idx = styles.index(active_style)
+                            active_style = styles[(idx + 1) % len(styles)]
+
+            if timeout and time.time() > end_time and not rotation_paused:
+                break
+
+
 def draw(input_mol, name=None, width=80, height=40, three_d=True,
          add_hydrogens=False, timeout=None, stdscr=None, auto_resize=True,
-         style='braille', color='depth', rep='trace'):
+         style='braille', color='depth', rep='trace', backend='ansi'):
     """
     Main function for TerMol. Renders small molecules or protein structures in 2D or 3D.
     Inputs:
@@ -584,38 +1039,49 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
         style: For proteins: 'braille' (subpixel dots, default) or 'ascii' (density ramp).
         color: For proteins: 'depth' (default luminance ramp), 'rainbow' (N->C), 'ss' (secondary structure), or 'none'.
         rep: For proteins: 'trace' (default 1D line), 'cartoon'/'ribbon' (flat ribbons and arrows), or 'tube'.
+        backend: Interactive 3D backend: 'ansi' (default, 24-bit TrueColor with mouse drag/scroll) or 'curses' (legacy curses).
     """
     if three_d:
-        curses.wrapper(draw_persistent, input_mol, name=name, width=width, height=height,
-                       three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
-                       auto_resize=auto_resize, style=style, color=color, rep=rep)
+        if backend == 'curses':
+            curses.wrapper(draw_persistent, input_mol, name=name, width=width, height=height,
+                           three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
+                           auto_resize=auto_resize, style=style, color=color, rep=rep, backend='curses')
+        else:
+            draw_persistent(None, input_mol, name=name, width=width, height=height,
+                            three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
+                            auto_resize=auto_resize, style=style, color=color, rep=rep, backend='ansi')
     else:
         draw_persistent(None, input_mol, name=name, width=width, height=height,
                         three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
-                        auto_resize=auto_resize, style=style, color=color, rep=rep)
+                        auto_resize=auto_resize, style=style, color=color, rep=rep, backend=backend)
 
 
 def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
                     three_d=True, add_hydrogens=False, timeout=None,
-                    auto_resize=True, style='braille', color='depth', rep='trace'):
-    """Persistent curses wrapper for draw."""
+                    auto_resize=True, style='braille', color='depth', rep='trace',
+                    backend='ansi'):
+    """Persistent wrapper for draw supporting both ANSI and curses backends."""
     molecule_data = get_molecule_data(input_mol, three_d=three_d, add_hydrogens=add_hydrogens, representation=rep)
     canvas = MoleculeCanvas(width, height, float(width), float(height), aspect_ratio=2.0)
 
     if three_d:
-        if stdscr:
-            show_molecule_3D(stdscr, molecule_data, canvas, name=name, timeout=timeout,
-                             auto_resize=auto_resize, style=style, color=color, rep=rep)
+        if backend == 'curses':
+            if stdscr:
+                show_molecule_3D(stdscr, molecule_data, canvas, name=name, timeout=timeout,
+                                 auto_resize=auto_resize, style=style, color=color, rep=rep)
+            else:
+                curses.wrapper(show_molecule_3D, molecule_data, canvas, name=name,
+                               timeout=timeout, auto_resize=auto_resize, style=style, color=color, rep=rep)
         else:
-            curses.wrapper(show_molecule_3D, molecule_data, canvas, name=name,
-                           timeout=timeout, auto_resize=auto_resize, style=style, color=color, rep=rep)
+            show_molecule_3D_ansi(molecule_data, canvas, name=name, timeout=timeout,
+                                  auto_resize=auto_resize, style=style, color=color, rep=rep)
     else:
         show_molecule_2D(molecule_data, canvas, name=name, style=style, color=color, rep=rep)
 
 
 def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
                add_hydrogens=False, timeout=None, auto_resize=True,
-               style='braille', color='depth', rep='trace'):
+               style='braille', color='depth', rep='trace', backend='ansi'):
     """Render multiple molecules or proteins in sequence."""
     if names and len(names) != len(input_mols):
         raise ValueError("The number of names must match the number of inputs!")
@@ -633,20 +1099,30 @@ def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
     if not three_d:
         for i in range(len(input_mols)):
             draw(input_mols[i], name=names[i], width=width, height=height,
-                 three_d=three_d, add_hydrogens=add_hydrogens, style=style, color=color, rep=rep)
+                 three_d=three_d, add_hydrogens=add_hydrogens, style=style, color=color, rep=rep, backend=backend)
         return
 
-    def loop_molecules(stdscr, molecules, mol_names, loop_timeout=None):
-        for i in range(len(molecules)):
+    if backend == 'curses':
+        def loop_molecules(stdscr, molecules, mol_names, loop_timeout=None):
+            for i in range(len(molecules)):
+                try:
+                    draw_persistent(stdscr, molecules[i], name=mol_names[i], timeout=loop_timeout,
+                                    width=width, height=height, three_d=three_d,
+                                    add_hydrogens=add_hydrogens, auto_resize=auto_resize,
+                                    style=style, color=color, rep=rep, backend='curses')
+                except Exception:
+                    continue
+
+        curses.wrapper(loop_molecules, input_mols, names, loop_timeout=timeout)
+    else:
+        for i in range(len(input_mols)):
             try:
-                draw_persistent(stdscr, molecules[i], name=mol_names[i], timeout=loop_timeout,
+                draw_persistent(None, input_mols[i], name=names[i], timeout=timeout,
                                 width=width, height=height, three_d=three_d,
                                 add_hydrogens=add_hydrogens, auto_resize=auto_resize,
-                                style=style, color=color, rep=rep)
+                                style=style, color=color, rep=rep, backend='ansi')
             except Exception:
                 continue
-
-    curses.wrapper(loop_molecules, input_mols, names, loop_timeout=timeout)
 
 
 def showcase(timeout=5, width=80, height=40):

@@ -30,6 +30,10 @@ def termol_cli():
         '--rep', '--representation', dest='rep', choices=['trace', 'cartoon', 'ribbon', 'tube'], default='trace',
         help='Representation for proteins: "trace" (1D spline line, default), "cartoon"/"ribbon" (secondary structure ribbons & arrowheads), or "tube" (3D uniform thickness).'
     )
+    parser.add_argument(
+        '--backend', choices=['ansi', 'curses'], default='ansi',
+        help='Interactive 3D rendering backend: "ansi" (24-bit TrueColor with mouse drag/scroll, default) or "curses" (legacy curses).'
+    )
     args = parser.parse_args()
 
     width_default = 80
@@ -87,7 +91,8 @@ def termol_cli():
         auto_resize=auto_resize,
         style=args.style,
         color=args.color,
-        rep=args.rep
+        rep=args.rep,
+        backend=args.backend
     )
 
 

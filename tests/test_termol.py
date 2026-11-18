@@ -339,3 +339,55 @@ def test_depth_color_modes_ansi_render():
         ansi_out = canvas.render_ansi()
         assert len(ansi_out) > 0
         assert "\033[" in ansi_out
+
+
+def test_mouse_sgr_pattern_parsing():
+    """Verify SGR 1006 mouse event sequence parser."""
+    from termol.render import MOUSE_SGR_PATTERN
+
+    raw = "\x1b[<0;40;20M\x1b[<32;42;22M\x1b[<0;42;22m\x1b[<64;50;25M\x1b[<65;50;25M"
+    matches = list(MOUSE_SGR_PATTERN.finditer(raw))
+    assert len(matches) == 5
+
+    # Left button press at (40, 20)
+    assert int(matches[0].group(1)) == 0
+    assert int(matches[0].group(2)) == 40
+    assert int(matches[0].group(3)) == 20
+    assert matches[0].group(4) == 'M'
+
+    # Mouse drag at (42, 22)
+    assert int(matches[1].group(1)) == 32
+    assert int(matches[1].group(2)) == 42
+    assert int(matches[1].group(3)) == 22
+    assert matches[1].group(4) == 'M'
+
+    # Release
+    assert int(matches[2].group(1)) == 0
+    assert matches[2].group(4) == 'm'
+
+    # Scroll up / down
+    assert int(matches[3].group(1)) == 64
+    assert int(matches[4].group(1)) == 65
+
+
+def test_ansi_3d_viewer_protein_timeout():
+    """Verify ANSI 3D interactive viewer runs and terminates cleanly on timeout."""
+    from termol.render import show_molecule_3D_ansi
+    from termol.canvas import MoleculeCanvas
+    from termol.utilities import get_molecule_data
+
+    mol_data = get_molecule_data("1ubq", three_d=True)
+    canvas = MoleculeCanvas(60, 30, 60.0, 30.0, aspect_ratio=2.0)
+    # Run for 0.05 seconds
+    show_molecule_3D_ansi(mol_data, canvas, timeout=0.05, auto_resize=False)
+
+
+def test_ansi_3d_viewer_small_mol_timeout():
+    """Verify ANSI 3D interactive viewer runs on small molecules without error."""
+    from termol.render import show_molecule_3D_ansi
+    from termol.canvas import MoleculeCanvas
+    from termol.utilities import get_molecule_data
+
+    mol_data = get_molecule_data("c1ccccc1", three_d=True)
+    canvas = MoleculeCanvas(60, 30, 60.0, 30.0, aspect_ratio=2.0)
+    show_molecule_3D_ansi(mol_data, canvas, timeout=0.05, auto_resize=False)
