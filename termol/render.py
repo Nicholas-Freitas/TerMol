@@ -101,19 +101,6 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='dep
 
         scale_protein_for_canvas(segments, ligands, protein_canvas)
 
-        # Apply aspect ratio adjustment to Y coordinate
-        for seg in segments:
-            for pt in seg:
-                pt.coord[1] /= protein_canvas.aspect_ratio
-                if pt.left_coord is not None:
-                    pt.left_coord[1] /= protein_canvas.aspect_ratio
-                    pt.right_coord[1] /= protein_canvas.aspect_ratio
-                if pt.top_coord is not None:
-                    pt.top_coord[1] /= protein_canvas.aspect_ratio
-                    pt.bottom_coord[1] /= protein_canvas.aspect_ratio
-        for lig in ligands:
-            lig.coord[1] /= protein_canvas.aspect_ratio
-
         protein_canvas.clear()
         protein_canvas.draw_protein(segments, ligands)
 
@@ -292,26 +279,10 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
                 for lig in ligands:
                     lig.coord = np.dot(R, lig.coord)
 
-            # Project coordinates with aspect ratio
-            proj_segments = copy.deepcopy(segments)
-            for seg in proj_segments:
-                for pt in seg:
-                    pt.coord[1] /= protein_canvas.aspect_ratio
-                    if pt.left_coord is not None:
-                        pt.left_coord[1] /= protein_canvas.aspect_ratio
-                        pt.right_coord[1] /= protein_canvas.aspect_ratio
-                    if pt.top_coord is not None:
-                        pt.top_coord[1] /= protein_canvas.aspect_ratio
-                        pt.bottom_coord[1] /= protein_canvas.aspect_ratio
-
-            proj_ligands = copy.deepcopy(ligands)
-            for lig in proj_ligands:
-                lig.coord[1] /= protein_canvas.aspect_ratio
-
             protein_canvas.clear()
             protein_canvas.style = active_style
             protein_canvas.color_mode = active_color
-            protein_canvas.draw_protein(proj_segments, proj_ligands)
+            protein_canvas.draw_protein(segments, ligands)
 
             # Render to curses buffer
             for cy in range(min(protein_canvas.char_height, term_height - 2)):

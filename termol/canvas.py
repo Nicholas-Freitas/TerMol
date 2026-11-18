@@ -80,8 +80,8 @@ class Canvas:
         """Maps real-world coordinates to discrete character coordinates."""
         span_x = self.max_x - self.min_x
         span_y = self.max_y - self.min_y
-        cx = int(np.round(((x - self.min_x) / span_x) * (self.char_width - 1)))
-        cy = int(np.round(((y - self.min_y) / span_y) * (self.char_height - 1)))
+        cx = int(((x - self.min_x) / span_x) * (self.char_width - 1) + 0.5)
+        cy = int(((y - self.min_y) / span_y) * (self.char_height - 1) + 0.5)
         return cx, cy
 
     def clear(self):
@@ -90,12 +90,8 @@ class Canvas:
         self.z_buffer = np.full((self.char_height, self.char_width), -np.inf, dtype=float)
         self.color_data = [[None] * self.char_width for _ in range(self.char_height)]
 
-    def set_pixel(self, x: float, y: float, char: str, z: float = 0.0, color: Optional[Tuple[int, int, int]] = None) -> bool:
-        """
-        Place a character on the canvas with Z-buffering.
-        Returns True if the pixel was placed (closer than existing depth).
-        """
-        cx, cy = self.map_coords(x, y)
+    def set_pixel_cell(self, cx: int, cy: int, char: str, z: float = 0.0, color: Optional[Tuple[int, int, int]] = None) -> bool:
+        """Place a character directly at grid cell (cx, cy) with Z-buffering."""
         if 0 <= cx < self.char_width and 0 <= cy < self.char_height:
             if z >= self.z_buffer[cy, cx]:
                 self.z_buffer[cy, cx] = z
@@ -103,6 +99,14 @@ class Canvas:
                 self.color_data[cy][cx] = color
                 return True
         return False
+
+    def set_pixel(self, x: float, y: float, char: str, z: float = 0.0, color: Optional[Tuple[int, int, int]] = None) -> bool:
+        """
+        Place a character on the canvas with Z-buffering.
+        Returns True if the pixel was placed (closer than existing depth).
+        """
+        cx, cy = self.map_coords(x, y)
+        return self.set_pixel_cell(cx, cy, char, z=z, color=color)
 
     def __getitem__(self, coords: tuple):
         x, y = coords
@@ -332,53 +336,118 @@ class ProteinCanvas(Canvas):
     def _draw_line_ascii(self, x1: float, y1: float, z1: float,
                           x2: float, y2: float, z2: float,
                           norm_pos: float, ss: str, z_min: float, z_range: float):
-        """Draw a 3D line segment on the ASCII canvas with depth testing and color."""
-        cx1, cy1 = self.map_coords(x1, y1)
-        cx2, cy2 = self.map_coords(x2, y2)
-        steps = max(abs(cx2 - cx1), abs(cy2 - cy1), 1)
-        for s in range(steps + 1):
-            frac = s / steps
-            ix = x1 + frac * (x2 - x1)
-            iy = y1 + frac * (y2 - y1)
-            iz = z1 + frac * (z2 - z1)
-            iz_norm = (iz - z_min) / z_range
-            ic_idx = int(iz_norm * (len(ASCII_RAMP) - 1))
-            ic_char = ASCII_RAMP[max(0, min(ic_idx, len(ASCII_RAMP) - 1))]
-            ic_color = self._get_color(iz_norm, norm_pos, ss)
-            self.set_pixel(ix, iy, ic_char, z=iz, color=ic_color)
+        """Draw a 3D line segment on the ASCII canvas with depth testing and color (fast incremental)."""
+        span_x = self.max_x - self.min_x
+        span_y = self.max_y - self.min_y
+        scale_x = (self.char_width - 1) / span_x
+        scale_y = (self.char_height - 1) / (span_y * self.aspect_ratio)
+        min_x = self.min_x
+        min_y = self.min_y
+
+        cx1 = int((x1 - min_x) * scale_x + 0.5)
+        cy1 = int((y1 - min_y) * scale_y + 0.5)
+        cx2 = int((x2 - min_x) * scale_x + 0.5)
+        cy2 = int((y2 - min_y) * scale_y + 0.5)
+
+        dx = cx2 - cx1
+        dy = cy2 - cy1
+        steps = abs(dx) if abs(dx) > abs(dy) else abs(dy)
+        if steps == 0:
+            steps = 1
+
+        inv_steps = 1.0 / steps
+        x_inc = dx * inv_steps
+        y_inc = dy * inv_steps
+        z_inc = (z2 - z1) * inv_steps
+
+        curr_x = float(cx1)
+        curr_y = float(cy1)
+        curr_z = z1
+
+        char_w = self.char_width
+        char_h = self.char_height
+        z_buf = self.z_buffer
+        data = self.data
+        color_data = self.color_data
+        inv_z_range = 1.0 / z_range if z_range > 0 else 1.0
+        ramp_len_m1 = len(ASCII_RAMP) - 1
+
+        for _ in range(steps + 1):
+            ix = int(curr_x + 0.5)
+            iy = int(curr_y + 0.5)
+            if 0 <= ix < char_w and 0 <= iy < char_h:
+                if curr_z >= z_buf[iy, ix]:
+                    z_buf[iy, ix] = curr_z
+                    iz_norm = (curr_z - z_min) * inv_z_range
+                    char_idx = int(iz_norm * ramp_len_m1)
+                    if char_idx > ramp_len_m1:
+                        char_idx = ramp_len_m1
+                    elif char_idx < 0:
+                        char_idx = 0
+                    data[iy][ix] = ASCII_RAMP[char_idx]
+                    color_data[iy][ix] = self._get_color(iz_norm, norm_pos, ss)
+            curr_x += x_inc
+            curr_y += y_inc
+            curr_z += z_inc
 
     def _draw_line_braille(self, x1: float, y1: float, z1: float,
                             x2: float, y2: float, z2: float,
                             norm_pos: float, ss: str, z_min: float, z_range: float):
-        """Draw a 3D line segment on the Braille subpixel grid with depth testing and color."""
+        """Draw a 3D line segment on the Braille subpixel grid with depth testing and color (fast incremental)."""
         span_x = self.max_x - self.min_x
         span_y = self.max_y - self.min_y
+        scale_x = (self.sub_width - 1) / span_x
+        scale_y = (self.sub_height - 1) / (span_y * self.aspect_ratio)
+        min_x = self.min_x
+        min_y = self.min_y
 
-        sub_x1 = int(np.round(((x1 - self.min_x) / span_x) * (self.sub_width - 1)))
-        sub_y1 = int(np.round(((y1 - self.min_y) / span_y) * (self.sub_height - 1)))
-        sub_x2 = int(np.round(((x2 - self.min_x) / span_x) * (self.sub_width - 1)))
-        sub_y2 = int(np.round(((y2 - self.min_y) / span_y) * (self.sub_height - 1)))
+        sub_x1 = int((x1 - min_x) * scale_x + 0.5)
+        sub_y1 = int((y1 - min_y) * scale_y + 0.5)
+        sub_x2 = int((x2 - min_x) * scale_x + 0.5)
+        sub_y2 = int((y2 - min_y) * scale_y + 0.5)
 
-        steps = max(abs(sub_x2 - sub_x1), abs(sub_y2 - sub_y1), 1)
-        for s in range(steps + 1):
-            frac = s / steps
-            sub_x = int(np.round(sub_x1 + frac * (sub_x2 - sub_x1)))
-            sub_y = int(np.round(sub_y1 + frac * (sub_y2 - sub_y1)))
-            iz = z1 + frac * (z2 - z1)
+        dx = sub_x2 - sub_x1
+        dy = sub_y2 - sub_y1
+        steps = abs(dx) if abs(dx) > abs(dy) else abs(dy)
+        if steps == 0:
+            steps = 1
 
-            if 0 <= sub_x < self.sub_width and 0 <= sub_y < self.sub_height:
-                if iz >= self.sub_z_buffer[sub_y, sub_x]:
-                    self.sub_z_buffer[sub_y, sub_x] = iz
-                    cx = sub_x // 2
-                    cy = sub_y // 4
-                    dx = sub_x % 2
-                    dy = sub_y % 4
-                    self.braille_bits[cy, cx] |= BRAILLE_DOT_MAP.get((dx, dy), 0)
+        inv_steps = 1.0 / steps
+        x_inc = dx * inv_steps
+        y_inc = dy * inv_steps
+        z_inc = (z2 - z1) * inv_steps
 
-                    iz_norm = (iz - z_min) / z_range
-                    if iz >= self.z_buffer[cy, cx]:
-                        self.z_buffer[cy, cx] = iz
-                        self.color_data[cy][cx] = self._get_color(iz_norm, norm_pos, ss)
+        curr_x = float(sub_x1)
+        curr_y = float(sub_y1)
+        curr_z = z1
+
+        sub_w = self.sub_width
+        sub_h = self.sub_height
+        sub_z = self.sub_z_buffer
+        braille_bits = self.braille_bits
+        z_buf = self.z_buffer
+        color_data = self.color_data
+        inv_z_range = 1.0 / z_range if z_range > 0 else 1.0
+
+        for _ in range(steps + 1):
+            ix = int(curr_x + 0.5)
+            iy = int(curr_y + 0.5)
+            if 0 <= ix < sub_w and 0 <= iy < sub_h:
+                if curr_z >= sub_z[iy, ix]:
+                    sub_z[iy, ix] = curr_z
+                    cx = ix >> 1
+                    cy = iy >> 2
+                    dx_bit = ix & 1
+                    dy_bit = iy & 3
+                    braille_bits[cy, cx] |= BRAILLE_DOT_MAP.get((dx_bit, dy_bit), 0)
+
+                    iz_norm = (curr_z - z_min) * inv_z_range
+                    if curr_z >= z_buf[cy, cx]:
+                        z_buf[cy, cx] = curr_z
+                        color_data[cy][cx] = self._get_color(iz_norm, norm_pos, ss)
+            curr_x += x_inc
+            curr_y += y_inc
+            curr_z += z_inc
 
     def _draw_protein_ascii(self, backbone_segments, ligands, z_min: float, z_range: float):
         """Rasterize backbone segments onto ASCII grid using density ramp and Z-buffer."""
@@ -392,28 +461,28 @@ class ProteinCanvas(Canvas):
                 for i in range(len(segment)):
                     pt = segment[i]
                     x, y, z = pt.coord
-                    z_norm = (z - z_min) / z_range
-                    color = self._get_color(z_norm, pt.norm_pos, pt.ss)
-
-                    char_idx = int(z_norm * (len(ASCII_RAMP) - 1))
-                    char = ASCII_RAMP[max(0, min(char_idx, len(ASCII_RAMP) - 1))]
-
                     if i > 0:
                         prev_pt = segment[i - 1]
                         px, py, pz = prev_pt.coord
                         self._draw_line_ascii(px, py, pz, x, y, z, pt.norm_pos, pt.ss, z_min, z_range)
                     else:
-                        self.set_pixel(x, y, char, z=z, color=color)
+                        span_x = self.max_x - self.min_x
+                        span_y = self.max_y - self.min_y
+                        cx = int(((x - self.min_x) / span_x) * (self.char_width - 1) + 0.5)
+                        cy = int(((y - self.min_y) / (span_y * self.aspect_ratio)) * (self.char_height - 1) + 0.5)
+                        z_norm = (z - z_min) / z_range
+                        char_idx = int(z_norm * (len(ASCII_RAMP) - 1))
+                        char = ASCII_RAMP[max(0, min(char_idx, len(ASCII_RAMP) - 1))]
+                        color = self._get_color(z_norm, pt.norm_pos, pt.ss)
+                        self.set_pixel_cell(cx, cy, char, z=z, color=color)
             else:
                 # Ribbon / Tube / Cartoon mode
                 for i in range(len(segment)):
                     pt = segment[i]
                     lx, ly, lz = pt.left_coord
                     rx, ry, rz = pt.right_coord
-                    # Draw cross-rung across ribbon width
                     self._draw_line_ascii(lx, ly, lz, rx, ry, rz, pt.norm_pos, pt.ss, z_min, z_range)
 
-                    # Connect edges along length
                     if i > 0:
                         prev = segment[i - 1]
                         plx, ply, plz = prev.left_coord
@@ -421,7 +490,6 @@ class ProteinCanvas(Canvas):
                         self._draw_line_ascii(plx, ply, plz, lx, ly, lz, pt.norm_pos, pt.ss, z_min, z_range)
                         self._draw_line_ascii(prx, pry, prz, rx, ry, rz, pt.norm_pos, pt.ss, z_min, z_range)
 
-                    # Tube vertical profile
                     if pt.top_coord is not None and pt.bottom_coord is not None:
                         tx, ty, tz = pt.top_coord
                         bx, by, bz = pt.bottom_coord
@@ -434,11 +502,16 @@ class ProteinCanvas(Canvas):
 
         # Draw any bound ligands as prominent element markers
         if ligands:
+            span_x = self.max_x - self.min_x
+            span_y = self.max_y - self.min_y
+            scale_x = (self.char_width - 1) / span_x
+            scale_y = (self.char_height - 1) / (span_y * self.aspect_ratio)
             for lig in ligands:
                 lx, ly, lz = lig.coord
-                lz_norm = (lz - z_min) / z_range
+                cx = int((lx - self.min_x) * scale_x + 0.5)
+                cy = int((ly - self.min_y) * scale_y + 0.5)
                 lig_color = (255, 230, 80) if self.color_mode != 'none' else None
-                self.set_pixel(lx, ly, lig.element[:1].upper(), z=lz + 0.2, color=lig_color)
+                self.set_pixel_cell(cx, cy, lig.element[:1].upper(), z=lz + 0.2, color=lig_color)
 
     def _draw_protein_braille(self, backbone_segments, ligands, z_min: float, z_range: float):
         """Rasterize backbone onto high-resolution 2x4 Braille subpixel grid."""
@@ -461,10 +534,8 @@ class ProteinCanvas(Canvas):
                     pt = segment[i]
                     lx, ly, lz = pt.left_coord
                     rx, ry, rz = pt.right_coord
-                    # Draw cross-rung
                     self._draw_line_braille(lx, ly, lz, rx, ry, rz, pt.norm_pos, pt.ss, z_min, z_range)
 
-                    # Connect edges along length
                     if i > 0:
                         prev = segment[i - 1]
                         plx, ply, plz = prev.left_coord
@@ -472,7 +543,6 @@ class ProteinCanvas(Canvas):
                         self._draw_line_braille(plx, ply, plz, lx, ly, lz, pt.norm_pos, pt.ss, z_min, z_range)
                         self._draw_line_braille(prx, pry, prz, rx, ry, rz, pt.norm_pos, pt.ss, z_min, z_range)
 
-                    # Tube vertical profile
                     if pt.top_coord is not None and pt.bottom_coord is not None:
                         tx, ty, tz = pt.top_coord
                         bx, by, bz = pt.bottom_coord
@@ -494,8 +564,13 @@ class ProteinCanvas(Canvas):
 
         # Overlay ligands
         if ligands:
+            span_x = self.max_x - self.min_x
+            span_y = self.max_y - self.min_y
+            scale_x = (self.char_width - 1) / span_x
+            scale_y = (self.char_height - 1) / (span_y * self.aspect_ratio)
             for lig in ligands:
                 lx, ly, lz = lig.coord
-                lz_norm = (lz - z_min) / z_range
+                cx = int((lx - self.min_x) * scale_x + 0.5)
+                cy = int((ly - self.min_y) * scale_y + 0.5)
                 lig_color = (255, 230, 80) if self.color_mode != 'none' else None
-                self.set_pixel(lx, ly, lig.element[:1].upper(), z=lz + 0.2, color=lig_color)
+                self.set_pixel_cell(cx, cy, lig.element[:1].upper(), z=lz + 0.2, color=lig_color)
