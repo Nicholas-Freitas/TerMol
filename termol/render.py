@@ -5,11 +5,12 @@ import re
 import copy
 import time
 import ctypes
+import traceback
 import numpy as np
 import curses
 from pathlib import Path
 import importlib.resources as pkg_resources
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 from .canvas import Canvas, MoleculeCanvas, ProteinCanvas
 from .utilities import (
@@ -574,6 +575,8 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
 
 
 MOUSE_SGR_PATTERN = re.compile(r'\x1b\[<(\d+);(\d+);(\d+)([Mm])')
+CSI_PATTERN = re.compile(r'\x1b\[[0-9;?<=]*[a-zA-Z~]')
+INCOMPLETE_CSI_PATTERN = re.compile(r'\x1b\[[0-9;?<=]*$')
 
 
 class AnsiTerminalSession:
@@ -703,11 +706,54 @@ def read_available_input() -> str:
     return "".join(chars)
 
 
+def render_diff(curr_data: List[List[str]],
+                curr_color: List[List[Optional[Tuple[int, int, int]]]],
+                prev_grid: List[List[Tuple[str, Optional[Tuple[int, int, int]]]]],
+                char_width: int,
+                char_height: int) -> str:
+    """
+    Generate minimal ANSI sequence updating only cells that changed since prev_grid.
+    Updates prev_grid in-place.
+    Canvas row cy maps to terminal line (cy + 2) (line 1 is the header).
+    Canvas col cx maps to terminal column (cx + 1).
+    """
+    diff_parts = []
+    for cy in range(char_height):
+        cx = 0
+        while cx < char_width:
+            c_char = curr_data[cy][cx]
+            c_col = curr_color[cy][cx]
+            p_char, p_col = prev_grid[cy][cx]
+
+            if c_char != p_char or c_col != p_col:
+                run_start = cx
+                run_chars = []
+                while cx < char_width:
+                    ch = curr_data[cy][cx]
+                    col = curr_color[cy][cx]
+                    pch, pcol = prev_grid[cy][cx]
+                    if ch == pch and col == pcol:
+                        break
+                    prev_grid[cy][cx] = (ch, col)
+                    if col is not None and ch != ' ':
+                        r, g, b = col
+                        run_chars.append(f"\033[38;2;{r};{g};{b}m{ch}\033[0m")
+                    else:
+                        run_chars.append(ch)
+                    cx += 1
+                diff_parts.append(f"\033[{cy + 2};{run_start + 1}H{''.join(run_chars)}")
+            else:
+                cx += 1
+    return "".join(diff_parts)
+
+
 def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
-                          auto_resize=True, style='braille', color='depth', rep='trace'):
+                          auto_resize=True, style='braille', color='depth', rep='trace',
+                          diff_mode=False):
     """
     Interactive 3D TrueColor ANSI renderer with mouse click-drag rotation and scroll zoom.
     Directly streams 24-bit RGB ANSI escape sequences, completely bypassing curses.
+    Supports differential buffer updates (toggle with 'U' or diff_mode=True) and live FPS counter.
     """
     is_protein = isinstance(molecule_data, MoleculeData) and molecule_data.is_protein
 
@@ -781,7 +827,10 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
 
         def apply_protein_zoom(factor: float):
             nonlocal zoom_scale
-            zoom_scale *= factor
+            new_scale = zoom_scale * factor
+            if new_scale < 0.05 or new_scale > 50.0:
+                return
+            zoom_scale = new_scale
             for seg in segments:
                 for pt in seg:
                     pt.coord *= factor
@@ -821,9 +870,14 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
         atom_positions, atom_elements, atom_charges, bonds = molecule_data
         atom_positions = atom_positions.copy()
         atom_positions = scale_for_canvas(atom_positions, canvas)
+        mol_zoom_scale = 1.0
 
         def apply_mol_zoom(factor: float):
-            nonlocal atom_positions
+            nonlocal atom_positions, mol_zoom_scale
+            new_scale = mol_zoom_scale * factor
+            if new_scale < 0.05 or new_scale > 50.0:
+                return
+            mol_zoom_scale = new_scale
             atom_positions *= factor
 
         def apply_mol_rotation_delta(dx: float, dy: float):
@@ -844,147 +898,228 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
     dragging = False
     last_mouse_pos = None
 
-    with AnsiTerminalSession():
-        while True:
-            # Check terminal size
-            if auto_resize:
-                try:
-                    curr_ts = os.get_terminal_size()
-                    cw, ch = curr_ts.columns, curr_ts.lines
-                    if cw != term_width or ch != term_height:
-                        term_width, term_height = cw, ch
-                        canvas.resize_canvas(term_width, max(10, term_height - 2))
-                        if is_protein:
-                            protein_canvas.resize_canvas(term_width, max(10, term_height - 2))
-                        sys.stdout.write("\033[2J")
-                except Exception:
-                    pass
+    fps_history = []
+    last_frame_time = time.perf_counter()
+    prev_grid = None
+    need_full_redraw = True
 
-            if is_protein:
-                # Rotate protein if auto-spinning and not actively dragging
-                if not rotation_paused and not dragging:
-                    R = rotation_matrix(rotation_axis, np.radians(theta))
-                    cum_R = np.dot(R, cum_R)
-                    for seg in segments:
-                        for pt in seg:
-                            pt.coord = np.dot(R, pt.coord)
-                            if pt.left_coord is not None:
-                                pt.left_coord = np.dot(R, pt.left_coord)
-                                pt.right_coord = np.dot(R, pt.right_coord)
-                            if pt.top_coord is not None:
-                                pt.top_coord = np.dot(R, pt.top_coord)
-                                pt.bottom_coord = np.dot(R, pt.bottom_coord)
-                    for lig in ligands:
-                        lig.coord = np.dot(R, lig.coord)
+    try:
+        with AnsiTerminalSession():
+            while True:
+                # Rolling FPS calculation (15-frame rolling average)
+                now = time.perf_counter()
+                dt = now - last_frame_time
+                last_frame_time = now
+                if dt > 0:
+                    fps_history.append(1.0 / dt)
+                    if len(fps_history) > 15:
+                        fps_history.pop(0)
 
-                protein_canvas.clear()
-                protein_canvas.style = active_style
-                protein_canvas.color_mode = active_color
-                protein_canvas.draw_protein(segments, ligands)
+                fps_val = sum(fps_history) / len(fps_history) if fps_history else 0.0
+                fps_str = f"[{fps_val:4.1f} FPS]"
+                diff_str = f"[DIFF: {'ON' if diff_mode else 'OFF'} (U)]"
 
-                display_name = name or molecule_data.name or "Protein"
-                res_num = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
-                header_text = f" {display_name} ({res_num} res) [{active_rep.upper()} (M) | {active_style.upper()} (B) | {active_color.upper()} (C) | Drag: rotate | Scroll: zoom] "
-                if len(header_text) > protein_canvas.char_width - 6:
-                    header_text = f" {display_name} [{active_rep.upper()} | {active_style.upper()} | {active_color.upper()}] "
-                if len(header_text) > protein_canvas.char_width - 6:
-                    header_text = header_text[:protein_canvas.char_width - 10] + "... "
-                header_line = header_text.center(protein_canvas.char_width, "=")
-
-                if active_color == 'none':
-                    body = protein_canvas.render_plain()
-                else:
-                    body = protein_canvas.render_ansi()
-
-                frame = f"\033[H\033[1;36m{header_line}\033[0m\n{body}"
-                sys.stdout.write(frame)
-                sys.stdout.flush()
-            else:
-                # Small molecule
-                if not rotation_paused and not dragging:
-                    atom_positions = rotate_points(atom_positions, rotation_axis, np.radians(theta))
-
-                stretched = atom_positions.copy()
-                stretched[:, 1] /= canvas.aspect_ratio
-                positions_2D = [(p[0], p[1]) for p in stretched]
-
-                canvas.clear()
-                canvas.draw_molecules(positions_2D, atom_elements, atom_charges, bonds)
-
-                display_name = name or "Molecule"
-                header_text = f" {display_name} [Small Mol | Drag: rotate | Scroll: zoom] "
-                if len(header_text) > canvas.char_width - 6:
-                    header_text = header_text[:canvas.char_width - 10] + "... "
-                header_line = header_text.center(canvas.char_width, "=")
-                body = str(canvas)
-
-                frame = f"\033[H\033[1;36m{header_line}\033[0m\n{body}"
-                sys.stdout.write(frame)
-                sys.stdout.flush()
-
-            # Non-blocking input loop
-            time.sleep(0.025)
-            raw_input = read_available_input()
-            if raw_input:
-                # 1. Parse mouse events
-                total_dx = 0
-                total_dy = 0
-                for m in MOUSE_SGR_PATTERN.finditer(raw_input):
-                    btn = int(m.group(1))
-                    col = int(m.group(2))
-                    row = int(m.group(3))
-                    act = m.group(4)
-
-                    if act == 'M':
-                        if btn == 0:
-                            dragging = True
-                            last_mouse_pos = (col, row)
-                            rotation_paused = True
-                        elif btn == 32 and dragging and last_mouse_pos is not None:
-                            total_dx += (col - last_mouse_pos[0])
-                            total_dy += (row - last_mouse_pos[1])
-                            last_mouse_pos = (col, row)
-                        elif btn == 64:
+                # Check terminal size
+                if auto_resize:
+                    try:
+                        curr_ts = os.get_terminal_size()
+                        cw, ch = curr_ts.columns, curr_ts.lines
+                        if cw != term_width or ch != term_height:
+                            term_width, term_height = cw, ch
+                            canvas.resize_canvas(term_width, max(10, term_height - 2))
                             if is_protein:
-                                apply_protein_zoom(1.05)
-                            else:
-                                apply_mol_zoom(1.05)
-                        elif btn == 65:
-                            if is_protein:
-                                apply_protein_zoom(0.95)
-                            else:
-                                apply_mol_zoom(0.95)
-                    elif act == 'm' and btn == 0:
-                        dragging = False
-                        last_mouse_pos = None
+                                protein_canvas.resize_canvas(term_width, max(10, term_height - 2))
+                            sys.stdout.write("\033[2J")
+                            need_full_redraw = True
+                            prev_grid = None
+                    except Exception:
+                        pass
 
-                if total_dx != 0 or total_dy != 0:
-                    if is_protein:
-                        apply_protein_rotation_delta(total_dx, total_dy)
+                if is_protein:
+                    # Rotate protein if auto-spinning and not actively dragging
+                    if not rotation_paused and not dragging:
+                        R = rotation_matrix(rotation_axis, np.radians(theta))
+                        cum_R = np.dot(R, cum_R)
+                        for seg in segments:
+                            for pt in seg:
+                                pt.coord = np.dot(R, pt.coord)
+                                if pt.left_coord is not None:
+                                    pt.left_coord = np.dot(R, pt.left_coord)
+                                    pt.right_coord = np.dot(R, pt.right_coord)
+                                if pt.top_coord is not None:
+                                    pt.top_coord = np.dot(R, pt.top_coord)
+                                    pt.bottom_coord = np.dot(R, pt.bottom_coord)
+                        for lig in ligands:
+                            lig.coord = np.dot(R, lig.coord)
+
+                    protein_canvas.clear()
+                    protein_canvas.style = active_style
+                    protein_canvas.color_mode = active_color
+                    protein_canvas.draw_protein(segments, ligands)
+
+                    display_name = name or molecule_data.name or "Protein"
+                    res_num = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
+                    cw = protein_canvas.char_width
+
+                    header_left = f" {fps_str} {diff_str} {display_name} ({res_num} res) "
+                    header_right = f" [{active_rep.upper()} (M) | {active_style.upper()} (B) | {active_color.upper()} (C)] "
+                    if len(header_left) + len(header_right) <= cw:
+                        pad = cw - len(header_left) - len(header_right)
+                        header_line = header_left + ("=" * pad) + header_right
                     else:
-                        apply_mol_rotation_delta(total_dx, total_dy)
+                        compact_right = f" [{active_rep.upper()}|{active_style.upper()}|{active_color.upper()}] "
+                        if len(header_left) + len(compact_right) <= cw:
+                            pad = cw - len(header_left) - len(compact_right)
+                            header_line = header_left + ("=" * pad) + compact_right
+                        else:
+                            combined = f"{fps_str} {diff_str} {display_name}"
+                            header_line = combined[:cw].ljust(cw, "=")
 
-                # 2. Parse keyboard events
-                key_input = MOUSE_SGR_PATTERN.sub('', raw_input)
-                if key_input:
-                    if '\x1b[A' in key_input:
+                    if diff_mode and not need_full_redraw and prev_grid is not None:
+                        # Differential screen update
+                        sys.stdout.write(f"\033[1;1H\033[1;36m{header_line}\033[0m")
+                        diff_output = render_diff(
+                            protein_canvas.data,
+                            protein_canvas.color_data,
+                            prev_grid,
+                            protein_canvas.char_width,
+                            protein_canvas.char_height
+                        )
+                        if diff_output:
+                            sys.stdout.write(diff_output)
+                        sys.stdout.flush()
+                    else:
+                        # Full screen refresh
+                        if active_color == 'none':
+                            body = protein_canvas.render_plain()
+                        else:
+                            body = protein_canvas.render_ansi()
+
+                        frame = f"\033[H\033[1;36m{header_line}\033[0m\n{body}"
+                        sys.stdout.write(frame)
+                        sys.stdout.flush()
+                        prev_grid = [[(protein_canvas.data[r][c], protein_canvas.color_data[r][c])
+                                      for c in range(protein_canvas.char_width)]
+                                     for r in range(protein_canvas.char_height)]
+                        need_full_redraw = False
+                else:
+                    # Small molecule
+                    if not rotation_paused and not dragging:
+                        atom_positions = rotate_points(atom_positions, rotation_axis, np.radians(theta))
+
+                    stretched = atom_positions.copy()
+                    stretched[:, 1] /= canvas.aspect_ratio
+                    positions_2D = [(p[0], p[1]) for p in stretched]
+
+                    canvas.clear()
+                    canvas.draw_molecules(positions_2D, atom_elements, atom_charges, bonds)
+
+                    display_name = name or "Molecule"
+                    cw = canvas.char_width
+                    header_left = f" {fps_str} {diff_str} {display_name} [Small Mol] "
+                    header_right = " [Drag: rotate | Scroll: zoom] "
+                    if len(header_left) + len(header_right) <= cw:
+                        pad = cw - len(header_left) - len(header_right)
+                        header_line = header_left + ("=" * pad) + header_right
+                    else:
+                        combined = f"{fps_str} {diff_str} {display_name}"
+                        header_line = combined[:cw].ljust(cw, "=")
+
+                    if diff_mode and not need_full_redraw and prev_grid is not None:
+                        # Differential screen update
+                        sys.stdout.write(f"\033[1;1H\033[1;36m{header_line}\033[0m")
+                        diff_output = render_diff(
+                            canvas.data,
+                            canvas.color_data,
+                            prev_grid,
+                            canvas.char_width,
+                            canvas.char_height
+                        )
+                        if diff_output:
+                            sys.stdout.write(diff_output)
+                        sys.stdout.flush()
+                    else:
+                        # Full screen refresh
+                        body = str(canvas)
+                        frame = f"\033[H\033[1;36m{header_line}\033[0m\n{body}"
+                        sys.stdout.write(frame)
+                        sys.stdout.flush()
+                        prev_grid = [[(canvas.data[r][c], canvas.color_data[r][c])
+                                      for c in range(canvas.char_width)]
+                                     for r in range(canvas.char_height)]
+                        need_full_redraw = False
+
+                # Non-blocking input loop
+                time.sleep(0.025)
+                raw_input = read_available_input()
+                if raw_input:
+                    # 1. Parse mouse events
+                    total_dx = 0
+                    total_dy = 0
+                    for m in MOUSE_SGR_PATTERN.finditer(raw_input):
+                        btn = int(m.group(1))
+                        col = int(m.group(2))
+                        row = int(m.group(3))
+                        act = m.group(4)
+
+                        if act == 'M':
+                            if btn == 0:
+                                dragging = True
+                                last_mouse_pos = (col, row)
+                                rotation_paused = True
+                            elif btn == 32 and dragging and last_mouse_pos is not None:
+                                total_dx += (col - last_mouse_pos[0])
+                                total_dy += (row - last_mouse_pos[1])
+                                last_mouse_pos = (col, row)
+                            elif btn == 64:
+                                if is_protein:
+                                    apply_protein_zoom(1.05)
+                                else:
+                                    apply_mol_zoom(1.05)
+                            elif btn == 65:
+                                if is_protein:
+                                    apply_protein_zoom(0.95)
+                                else:
+                                    apply_mol_zoom(0.95)
+                        elif act == 'm' and btn == 0:
+                            dragging = False
+                            last_mouse_pos = None
+
+                    if total_dx != 0 or total_dy != 0:
+                        if is_protein:
+                            apply_protein_rotation_delta(total_dx, total_dy)
+                        else:
+                            apply_mol_rotation_delta(total_dx, total_dy)
+
+                    # 2. Parse keyboard events
+                    if '\x1b[A' in raw_input:
                         rotation_axis = (1, 0, 0)
                         rotation_paused = False
-                    elif '\x1b[B' in key_input:
+                    elif '\x1b[B' in raw_input:
                         rotation_axis = (-1, 0, 0)
                         rotation_paused = False
-                    elif '\x1b[C' in key_input:
+                    elif '\x1b[C' in raw_input:
                         rotation_axis = (0, -1, 0)
                         rotation_paused = False
-                    elif '\x1b[D' in key_input:
+                    elif '\x1b[D' in raw_input:
                         rotation_axis = (0, 1, 0)
                         rotation_paused = False
 
-                    for ch in key_input:
-                        if ch in ('q', 'Q', 'x', 'X', '\x1b'):
+                    # Strip all CSI escape sequences and trailing incomplete sequences
+                    key_chars = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_input))
+
+                    # Standalone Escape key exits
+                    if raw_input == '\x1b':
+                        return
+
+                    for ch in key_chars:
+                        if ch in ('q', 'Q', 'x', 'X'):
                             return
                         elif ch == ' ':
                             rotation_paused = not rotation_paused
+                        elif ch in ('u', 'U'):
+                            diff_mode = not diff_mode
+                            need_full_redraw = True
                         elif ch in ('a', 'A'):
                             rotation_axis = (0, 1, 0)
                             rotation_paused = False
@@ -1014,20 +1149,26 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                             idx = rep_modes.index(active_rep) if active_rep in rep_modes else 0
                             active_rep = rep_modes[(idx + 1) % len(rep_modes)]
                             segments = get_segments(active_rep)
+                            need_full_redraw = True
                         elif ch in ('c', 'C') and is_protein:
                             idx = color_modes.index(active_color)
                             active_color = color_modes[(idx + 1) % len(color_modes)]
+                            need_full_redraw = True
                         elif ch in ('b', 'B') and is_protein:
                             idx = styles.index(active_style)
                             active_style = styles[(idx + 1) % len(styles)]
+                            need_full_redraw = True
 
-            if timeout and time.time() > end_time and not rotation_paused:
-                break
+                if timeout and time.time() > end_time and not rotation_paused:
+                    break
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise e
 
 
 def draw(input_mol, name=None, width=80, height=40, three_d=True,
          add_hydrogens=False, timeout=None, stdscr=None, auto_resize=True,
-         style='braille', color='depth', rep='trace', backend='ansi'):
+         style='braille', color='depth', rep='trace', backend='ansi', diff_mode=False):
     """
     Main function for TerMol. Renders small molecules or protein structures in 2D or 3D.
     Inputs:
@@ -1040,6 +1181,7 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
         color: For proteins: 'depth' (default luminance ramp), 'rainbow' (N->C), 'ss' (secondary structure), or 'none'.
         rep: For proteins: 'trace' (default 1D line), 'cartoon'/'ribbon' (flat ribbons and arrows), or 'tube'.
         backend: Interactive 3D backend: 'ansi' (default, 24-bit TrueColor with mouse drag/scroll) or 'curses' (legacy curses).
+        diff_mode: Enable differential buffer updates in ANSI mode (default False, toggle with 'U').
     """
     if three_d:
         if backend == 'curses':
@@ -1049,7 +1191,8 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
         else:
             draw_persistent(None, input_mol, name=name, width=width, height=height,
                             three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
-                            auto_resize=auto_resize, style=style, color=color, rep=rep, backend='ansi')
+                            auto_resize=auto_resize, style=style, color=color, rep=rep, backend='ansi',
+                            diff_mode=diff_mode)
     else:
         draw_persistent(None, input_mol, name=name, width=width, height=height,
                         three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
@@ -1059,7 +1202,7 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
 def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
                     three_d=True, add_hydrogens=False, timeout=None,
                     auto_resize=True, style='braille', color='depth', rep='trace',
-                    backend='ansi'):
+                    backend='ansi', diff_mode=False):
     """Persistent wrapper for draw supporting both ANSI and curses backends."""
     molecule_data = get_molecule_data(input_mol, three_d=three_d, add_hydrogens=add_hydrogens, representation=rep)
     canvas = MoleculeCanvas(width, height, float(width), float(height), aspect_ratio=2.0)
@@ -1074,14 +1217,15 @@ def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
                                timeout=timeout, auto_resize=auto_resize, style=style, color=color, rep=rep)
         else:
             show_molecule_3D_ansi(molecule_data, canvas, name=name, timeout=timeout,
-                                  auto_resize=auto_resize, style=style, color=color, rep=rep)
+                                  auto_resize=auto_resize, style=style, color=color, rep=rep,
+                                  diff_mode=diff_mode)
     else:
         show_molecule_2D(molecule_data, canvas, name=name, style=style, color=color, rep=rep)
 
 
 def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
                add_hydrogens=False, timeout=None, auto_resize=True,
-               style='braille', color='depth', rep='trace', backend='ansi'):
+               style='braille', color='depth', rep='trace', backend='ansi', diff_mode=False):
     """Render multiple molecules or proteins in sequence."""
     if names and len(names) != len(input_mols):
         raise ValueError("The number of names must match the number of inputs!")
@@ -1105,24 +1249,19 @@ def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
     if backend == 'curses':
         def loop_molecules(stdscr, molecules, mol_names, loop_timeout=None):
             for i in range(len(molecules)):
-                try:
-                    draw_persistent(stdscr, molecules[i], name=mol_names[i], timeout=loop_timeout,
-                                    width=width, height=height, three_d=three_d,
-                                    add_hydrogens=add_hydrogens, auto_resize=auto_resize,
-                                    style=style, color=color, rep=rep, backend='curses')
-                except Exception:
-                    continue
+                draw_persistent(stdscr, molecules[i], name=mol_names[i], timeout=loop_timeout,
+                                width=width, height=height, three_d=three_d,
+                                add_hydrogens=add_hydrogens, auto_resize=auto_resize,
+                                style=style, color=color, rep=rep, backend='curses')
 
         curses.wrapper(loop_molecules, input_mols, names, loop_timeout=timeout)
     else:
         for i in range(len(input_mols)):
-            try:
-                draw_persistent(None, input_mols[i], name=names[i], timeout=timeout,
-                                width=width, height=height, three_d=three_d,
-                                add_hydrogens=add_hydrogens, auto_resize=auto_resize,
-                                style=style, color=color, rep=rep, backend='ansi')
-            except Exception:
-                continue
+            draw_persistent(None, input_mols[i], name=names[i], timeout=timeout,
+                            width=width, height=height, three_d=three_d,
+                            add_hydrogens=add_hydrogens, auto_resize=auto_resize,
+                            style=style, color=color, rep=rep, backend='ansi',
+                            diff_mode=diff_mode)
 
 
 def showcase(timeout=5, width=80, height=40):

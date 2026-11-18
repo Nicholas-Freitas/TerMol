@@ -34,6 +34,10 @@ def termol_cli():
         '--backend', choices=['ansi', 'curses'], default='ansi',
         help='Interactive 3D rendering backend: "ansi" (24-bit TrueColor with mouse drag/scroll, default) or "curses" (legacy curses).'
     )
+    parser.add_argument(
+        '--diff', action='store_true',
+        help='Enable differential screen updates (only update modified cells, toggle live with "U").'
+    )
     args = parser.parse_args()
 
     width_default = 80
@@ -92,7 +96,8 @@ def termol_cli():
         style=args.style,
         color=args.color,
         rep=args.rep,
-        backend=args.backend
+        backend=args.backend,
+        diff_mode=args.diff
     )
 
 

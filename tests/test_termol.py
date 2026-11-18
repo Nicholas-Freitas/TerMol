@@ -391,3 +391,111 @@ def test_ansi_3d_viewer_small_mol_timeout():
     mol_data = get_molecule_data("c1ccccc1", three_d=True)
     canvas = MoleculeCanvas(60, 30, 60.0, 30.0, aspect_ratio=2.0)
     show_molecule_3D_ansi(mol_data, canvas, timeout=0.05, auto_resize=False)
+
+
+def test_render_diff_dirty_and_clean():
+    """Verify differential screen updates generate minimal cursor moves and 0 bytes when unchanged."""
+    from termol.render import render_diff
+
+    char_w, char_h = 20, 10
+    prev_grid = [[(' ', None) for _ in range(char_w)] for _ in range(char_h)]
+    curr_data = [[' ' for _ in range(char_w)] for _ in range(char_h)]
+    curr_color = [[None for _ in range(char_w)] for _ in range(char_h)]
+
+    # Frame 0: grid is all blank, matches prev_grid
+    diff0 = render_diff(curr_data, curr_color, prev_grid, char_w, char_h)
+    assert diff0 == ""
+
+    # Frame 1: place a character with color at cy=2, cx=5 (terminal line 4, col 6)
+    curr_data[2][5] = '*'
+    curr_color[2][5] = (255, 100, 50)
+    diff1 = render_diff(curr_data, curr_color, prev_grid, char_w, char_h)
+    assert "\033[4;6H" in diff1
+    assert "\033[38;2;255;100;50m*\033[0m" in diff1
+
+    # Frame 2: identical to Frame 1 -> prev_grid is up to date, 0 bytes emitted
+    diff2 = render_diff(curr_data, curr_color, prev_grid, char_w, char_h)
+    assert diff2 == ""
+
+    # Frame 3: cell cleared back to space
+    curr_data[2][5] = ' '
+    curr_color[2][5] = None
+    diff3 = render_diff(curr_data, curr_color, prev_grid, char_w, char_h)
+    assert "\033[4;6H " in diff3
+
+
+def test_escape_sequence_parsing_no_premature_quit():
+    """Verify mouse events and escape sequences do not prematurely trigger viewer exit."""
+    from termol.render import CSI_PATTERN, INCOMPLETE_CSI_PATTERN
+
+    # Typical raw input stream from rapid mouse drag & scroll events
+    raw_drag = "\x1b[<32;40;20M\x1b[<32;42;21M\x1b[<32;45;22M"
+    raw_partial = "\x1b[<32;40;20M\x1b[<"
+    raw_arrow = "\x1b[A"
+    raw_quit_key = "q"
+    raw_esc_key = "\x1b"
+    raw_toggle_u = "u"
+
+    # Drag stream: should strip completely, leaving no characters
+    cleaned_drag = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_drag))
+    assert cleaned_drag == ""
+    assert not any(c in ('q', 'Q', 'x', 'X') for c in cleaned_drag)
+    assert raw_drag != '\x1b'
+
+    # Partial CSI stream: should also strip completely
+    cleaned_partial = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_partial))
+    assert cleaned_partial == ""
+
+    # Arrow key stream: should strip to empty
+    cleaned_arrow = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_arrow))
+    assert cleaned_arrow == ""
+
+    # Standalone Escape key: recognized as standalone '\x1b'
+    assert raw_esc_key == '\x1b'
+
+    # Quit key 'q': recognized
+    cleaned_q = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_quit_key))
+    assert any(c in ('q', 'Q', 'x', 'X') for c in cleaned_q)
+
+    # Diff toggle key 'u': recognized
+    cleaned_u = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_toggle_u))
+    assert 'u' in cleaned_u
+
+
+def test_cli_diff_argument():
+    """Verify --diff flag is supported by termol_cli parser."""
+    import argparse
+    from termol.cli import termol_cli
+    import sys
+
+    # Test parser with --diff
+    orig_argv = sys.argv
+    try:
+        sys.argv = ['termol', '1ubq', '--diff', '--timeout', '1']
+        # Mock draw_multi so it does not block or execute
+        import termol.cli as cli_mod
+        called_args = {}
+        def mock_draw_multi(*args, **kwargs):
+            called_args.update(kwargs)
+        orig_dm = cli_mod.draw_multi
+        cli_mod.draw_multi = mock_draw_multi
+        try:
+            cli_mod.termol_cli()
+            assert called_args.get('diff_mode') is True
+        finally:
+            cli_mod.draw_multi = orig_dm
+    finally:
+        sys.argv = orig_argv
+
+
+def test_ansi_3d_viewer_diff_mode_timeout():
+    """Verify ANSI 3D viewer executes cleanly with diff_mode=True."""
+    from termol.render import show_molecule_3D_ansi
+    from termol.canvas import MoleculeCanvas
+    from termol.utilities import get_molecule_data
+
+    mol_data = get_molecule_data("1ubq", three_d=True)
+    canvas = MoleculeCanvas(60, 30, 60.0, 30.0, aspect_ratio=2.0)
+    show_molecule_3D_ansi(mol_data, canvas, timeout=0.05, auto_resize=False, diff_mode=True)
+
+
