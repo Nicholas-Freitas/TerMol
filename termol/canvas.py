@@ -341,13 +341,13 @@ class ProteinCanvas(Canvas):
         span_y = self.max_y - self.min_y
         scale_x = (self.char_width - 1) / span_x
         scale_y = (self.char_height - 1) / (span_y * self.aspect_ratio)
-        min_x = self.min_x
-        min_y = self.min_y
+        mid_cx = (self.char_width - 1) / 2.0
+        mid_cy = (self.char_height - 1) / 2.0
 
-        cx1 = int((x1 - min_x) * scale_x + 0.5)
-        cy1 = int((y1 - min_y) * scale_y + 0.5)
-        cx2 = int((x2 - min_x) * scale_x + 0.5)
-        cy2 = int((y2 - min_y) * scale_y + 0.5)
+        cx1 = int(mid_cx + x1 * scale_x + 0.5)
+        cy1 = int(mid_cy + y1 * scale_y + 0.5)
+        cx2 = int(mid_cx + x2 * scale_x + 0.5)
+        cy2 = int(mid_cy + y2 * scale_y + 0.5)
 
         dx = cx2 - cx1
         dy = cy2 - cy1
@@ -398,13 +398,13 @@ class ProteinCanvas(Canvas):
         span_y = self.max_y - self.min_y
         scale_x = (self.sub_width - 1) / span_x
         scale_y = (self.sub_height - 1) / (span_y * self.aspect_ratio)
-        min_x = self.min_x
-        min_y = self.min_y
+        mid_sub_x = (self.sub_width - 1) / 2.0
+        mid_sub_y = (self.sub_height - 1) / 2.0
 
-        sub_x1 = int((x1 - min_x) * scale_x + 0.5)
-        sub_y1 = int((y1 - min_y) * scale_y + 0.5)
-        sub_x2 = int((x2 - min_x) * scale_x + 0.5)
-        sub_y2 = int((y2 - min_y) * scale_y + 0.5)
+        sub_x1 = int(mid_sub_x + x1 * scale_x + 0.5)
+        sub_y1 = int(mid_sub_y + y1 * scale_y + 0.5)
+        sub_x2 = int(mid_sub_x + x2 * scale_x + 0.5)
+        sub_y2 = int(mid_sub_y + y2 * scale_y + 0.5)
 
         dx = sub_x2 - sub_x1
         dy = sub_y2 - sub_y1
@@ -468,8 +468,12 @@ class ProteinCanvas(Canvas):
                     else:
                         span_x = self.max_x - self.min_x
                         span_y = self.max_y - self.min_y
-                        cx = int(((x - self.min_x) / span_x) * (self.char_width - 1) + 0.5)
-                        cy = int(((y - self.min_y) / (span_y * self.aspect_ratio)) * (self.char_height - 1) + 0.5)
+                        scale_x = (self.char_width - 1) / span_x
+                        scale_y = (self.char_height - 1) / (span_y * self.aspect_ratio)
+                        mid_cx = (self.char_width - 1) / 2.0
+                        mid_cy = (self.char_height - 1) / 2.0
+                        cx = int(mid_cx + x * scale_x + 0.5)
+                        cy = int(mid_cy + y * scale_y + 0.5)
                         z_norm = (z - z_min) / z_range
                         char_idx = int(z_norm * (len(ASCII_RAMP) - 1))
                         char = ASCII_RAMP[max(0, min(char_idx, len(ASCII_RAMP) - 1))]
@@ -506,10 +510,12 @@ class ProteinCanvas(Canvas):
             span_y = self.max_y - self.min_y
             scale_x = (self.char_width - 1) / span_x
             scale_y = (self.char_height - 1) / (span_y * self.aspect_ratio)
+            mid_cx = (self.char_width - 1) / 2.0
+            mid_cy = (self.char_height - 1) / 2.0
             for lig in ligands:
                 lx, ly, lz = lig.coord
-                cx = int((lx - self.min_x) * scale_x + 0.5)
-                cy = int((ly - self.min_y) * scale_y + 0.5)
+                cx = int(mid_cx + lx * scale_x + 0.5)
+                cy = int(mid_cy + ly * scale_y + 0.5)
                 lig_color = (255, 230, 80) if self.color_mode != 'none' else None
                 self.set_pixel_cell(cx, cy, lig.element[:1].upper(), z=lz + 0.2, color=lig_color)
 
@@ -568,9 +574,11 @@ class ProteinCanvas(Canvas):
             span_y = self.max_y - self.min_y
             scale_x = (self.char_width - 1) / span_x
             scale_y = (self.char_height - 1) / (span_y * self.aspect_ratio)
+            mid_cx = (self.char_width - 1) / 2.0
+            mid_cy = (self.char_height - 1) / 2.0
             for lig in ligands:
                 lx, ly, lz = lig.coord
-                cx = int((lx - self.min_x) * scale_x + 0.5)
-                cy = int((ly - self.min_y) * scale_y + 0.5)
+                cx = int(mid_cx + lx * scale_x + 0.5)
+                cy = int(mid_cy + ly * scale_y + 0.5)
                 lig_color = (255, 230, 80) if self.color_mode != 'none' else None
                 self.set_pixel_cell(cx, cy, lig.element[:1].upper(), z=lz + 0.2, color=lig_color)

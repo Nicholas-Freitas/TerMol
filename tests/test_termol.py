@@ -183,3 +183,22 @@ def test_representations(capsys):
         termol.draw("1crn", three_d=False, style='braille', color='none', rep=r)
         out = capsys.readouterr().out
         assert "1CRN" in out
+
+
+def test_protein_vertical_centering():
+    """Verify that proteins render centered vertically around the canvas midpoint."""
+    from termol.utilities import get_molecule_data
+    from termol.canvas import ProteinCanvas
+    from termol.render import scale_protein_for_canvas
+
+    data = get_molecule_data("1crn", representation='cartoon')
+    canvas = ProteinCanvas(80, 40, 80, 40, aspect_ratio=2.0, style='braille')
+    scale_protein_for_canvas(data.backbone_segments, data.ligands, canvas)
+    canvas.draw_protein(data.backbone_segments, data.ligands)
+
+    rows = [y for y in range(canvas.char_height) if any(canvas.data[y][x] != ' ' for x in range(canvas.char_width))]
+    assert len(rows) > 0
+    mid_row = (min(rows) + max(rows)) / 2.0
+    canvas_mid = (canvas.char_height - 1) / 2.0
+    # Center of content should be within 2.5 rows of the canvas midpoint
+    assert abs(mid_row - canvas_mid) <= 2.5
