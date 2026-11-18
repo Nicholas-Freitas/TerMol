@@ -26,7 +26,8 @@ class MoleculeData:
                  backbone_segments: Optional[List[List[BackbonePoint]]] = None,
                  ligands: Optional[List[Any]] = None,
                  name: Optional[str] = None,
-                 representation: str = 'trace'):
+                 representation: str = 'trace',
+                 bond_orders: Optional[List[float]] = None):
         self.is_protein = is_protein
         self.atom_positions = atom_positions if atom_positions is not None else np.empty((0, 3))
         self.atom_elements = atom_elements if atom_elements is not None else []
@@ -37,6 +38,7 @@ class MoleculeData:
         self.ligands = ligands if ligands is not None else []
         self.name = name
         self.representation = representation
+        self.bond_orders = bond_orders if bond_orders is not None else []
 
     def __iter__(self):
         # Allows legacy unpacking: atom_positions, atom_elements, atom_charges, bonds = data
@@ -131,13 +133,45 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False, representati
             pass
 
     # 2. Standard RDKit pathway for small molecules
+    suffix = Path(input_mol).suffix.lower() if isinstance(input_mol, (str, Path)) else ""
+    mol_name = None
+
     if isinstance(input_mol, Chem.Mol):
         mol = input_mol
-    elif Path(input_mol).suffix in ['.sdf', '.mol']:
-        mol = Chem.MolFromMolFile(str(input_mol))
-    elif Path(input_mol).suffix in ['.pdb']:
-        mol = Chem.MolFromPDBFile(str(input_mol))
+        if mol.HasProp('_Name'):
+            mol_name = mol.GetProp('_Name')
+    elif suffix in ['.sdf', '.sd']:
+        if Path(input_mol).exists():
+            mol_name = Path(input_mol).stem
+            try:
+                suppl = Chem.SDMolSupplier(str(input_mol))
+                mol = suppl[0] if len(suppl) > 0 and suppl[0] is not None else None
+            except Exception:
+                mol = None
+            if mol is None:
+                mol = Chem.MolFromMolFile(str(input_mol))
+        else:
+            mol = None
+    elif suffix in ['.mol']:
+        if Path(input_mol).exists():
+            mol_name = Path(input_mol).stem
+            mol = Chem.MolFromMolFile(str(input_mol))
+        else:
+            mol = None
+    elif suffix in ['.mol2']:
+        if Path(input_mol).exists():
+            mol_name = Path(input_mol).stem
+            mol = Chem.MolFromMol2File(str(input_mol))
+        else:
+            mol = None
+    elif suffix in ['.pdb', '.ent']:
+        if Path(input_mol).exists():
+            mol_name = Path(input_mol).stem
+            mol = Chem.MolFromPDBFile(str(input_mol))
+        else:
+            mol = None
     else:
+        # SMILES string
         mol = Chem.MolFromSmiles(str(input_mol))
     
     if not mol:
@@ -146,11 +180,21 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False, representati
     if add_hydrogens:
         mol = Chem.AddHs(mol)
 
-    if isinstance(input_mol, Chem.Mol) or not Path(input_mol).suffix in ['.pdb']:
-        if three_d:
+    # Coordinate handling:
+    # If the input molecule already has 3D coordinates (from SDF, MOL, MOL2, PDB, or pre-computed conformer),
+    # preserve them! Only generate/embed coordinates if missing.
+    has_conformer = mol.GetNumConformers() > 0
+    conformer_is_3d = has_conformer and mol.GetConformer().Is3D()
+
+    if three_d:
+        if not conformer_is_3d:
             AllChem.EmbedMolecule(mol)
-            AllChem.MMFFOptimizeMolecule(mol)
-        else:
+            try:
+                AllChem.MMFFOptimizeMolecule(mol)
+            except Exception:
+                pass
+    else:
+        if not has_conformer or conformer_is_3d:
             AllChem.Compute2DCoords(mol)
     
     # Get bond and atom positions
@@ -160,6 +204,7 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False, representati
     atom_elements  = [atom.GetSymbol() for atom in mol.GetAtoms()]
     atom_charges   = [atom.GetFormalCharge() for atom in mol.GetAtoms()]
     bonds          = [(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()) for bond in mol.GetBonds()]
+    bond_orders    = [float(bond.GetBondTypeAsDouble()) for bond in mol.GetBonds()]
 
     # Center coordinates around (0, 0, 0)
     if len(atom_positions) > 0:
@@ -176,7 +221,8 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False, representati
         atom_elements=atom_elements,
         atom_charges=atom_charges,
         bonds=bonds,
-        name=Path(input_mol).stem if isinstance(input_mol, (str, Path)) and Path(input_mol).exists() else None
+        name=mol_name or (Path(input_mol).stem if isinstance(input_mol, (str, Path)) and Path(input_mol).exists() else None),
+        bond_orders=bond_orders
     )
 
 

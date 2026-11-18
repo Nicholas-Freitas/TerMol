@@ -149,15 +149,60 @@ class Canvas:
         return self.render_plain()
 
 
+CPK_COLORS = {
+    'H': (240, 240, 240),
+    'C': (195, 195, 200),
+    'N': (55, 125, 255),
+    'O': (255, 50, 50),
+    'F': (110, 240, 110),
+    'Cl': (40, 220, 40),
+    'Br': (180, 50, 30),
+    'I': (155, 35, 185),
+    'P': (255, 140, 20),
+    'S': (245, 225, 30),
+    'B': (255, 180, 180),
+    'Si': (200, 180, 140),
+    'Fe': (220, 120, 0),
+    'Zn': (125, 128, 168),
+    'Mg': (140, 175, 110),
+    'Ca': (130, 130, 145),
+    'Na': (170, 95, 240),
+    'K': (145, 65, 215),
+}
+DEFAULT_ATOM_COLOR = (200, 200, 200)
+
+
 class MoleculeCanvas(Canvas):
     def __init__(self, char_width: int, char_height: int, width: float, height: float, aspect_ratio: float = 2.0):
         super().__init__(char_width, char_height, width, height, aspect_ratio)
 
-    def draw_molecules(self, atom_positions, atom_elements, atom_charges, bonds):
-        self.draw_bonds(atom_positions, bonds)
-        self.draw_atoms(atom_positions, atom_elements, atom_charges)
+    def draw_molecules(self, atom_positions, atom_elements, atom_charges, bonds, bond_orders=None):
+        # Determine depth range across all atom positions for depth-cueing
+        zs = [p[2] for p in atom_positions if len(p) > 2]
+        if zs and (max(zs) - min(zs)) > 1e-4:
+            min_z = min(zs)
+            max_z = max(zs)
+            z_range = max_z - min_z
+        else:
+            min_z = 0.0
+            max_z = 0.0
+            z_range = 0.0
 
-    def draw_bonds(self, atom_positions, bonds):
+        def get_depth_scale(z: float) -> float:
+            if z_range > 1e-4:
+                t = (z - min_z) / z_range
+                return 0.40 + 0.60 * t
+            return 1.0
+
+        self.draw_bonds(atom_positions, bonds, atom_elements=atom_elements,
+                        bond_orders=bond_orders, get_depth_scale=get_depth_scale)
+        self.draw_atoms(atom_positions, atom_elements, atom_charges,
+                        get_depth_scale=get_depth_scale)
+
+    def draw_bonds(self, atom_positions, bonds, atom_elements=None, bond_orders=None, get_depth_scale=None):
+        if get_depth_scale is None:
+            get_depth_scale = lambda z: 1.0
+
         def bresenham(x1, y1, x2, y2):
             points = []
             dx = abs(x2 - x1)
@@ -178,56 +223,88 @@ class MoleculeCanvas(Canvas):
                     y1 += sy
             return points
 
-        def get_bond_character(x1, y1, x2, y2):
+        def get_bond_character(x1, y1, x2, y2, order=1.0):
             dx = x2 - x1
             dy = y2 - y1
             angle = math.atan2(dy, dx) * 180 / math.pi
             if angle < 0:
                 angle += 180
             if angle < 30 or angle > 150:
-                return '-'
+                return '=' if order >= 2.0 else '-'
             elif 30 <= angle < 60:
                 return '\\'
             elif 60 <= angle < 120:
-                return '|'
+                return '‖' if order >= 2.0 else '|'
             else:
                 return '/'
 
-        for bond in bonds:
-            begin_idx, end_idx = bond
+        for b_idx, bond in enumerate(bonds):
+            begin_idx = bond[0]
+            end_idx = bond[1]
+            order = bond[2] if len(bond) > 2 else (bond_orders[b_idx] if bond_orders and b_idx < len(bond_orders) else 1.0)
             p1 = atom_positions[begin_idx]
             p2 = atom_positions[end_idx]
             x1, y1 = int(p1[0]), int(p1[1])
             x2, y2 = int(p2[0]), int(p2[1])
             z1 = p1[2] if len(p1) > 2 else 0.0
             z2 = p2[2] if len(p2) > 2 else 0.0
-            avg_z = 0.5 * (z1 + z2)
+
+            elem1 = atom_elements[begin_idx] if atom_elements and begin_idx < len(atom_elements) else 'C'
+            elem2 = atom_elements[end_idx] if atom_elements and end_idx < len(atom_elements) else 'C'
+            color1 = CPK_COLORS.get(elem1, DEFAULT_ATOM_COLOR)
+            color2 = CPK_COLORS.get(elem2, DEFAULT_ATOM_COLOR)
 
             points = bresenham(x1, y1, x2, y2)
-            bond_char = get_bond_character(x1, y1, x2, y2)
-            for x, y in points:
-                if self[x, y] == ' ':
-                    self.set_pixel(x, y, bond_char, z=avg_z - 0.1)
+            bond_char = get_bond_character(x1, y1, x2, y2, order=order)
+            num_pts = len(points)
 
-    def draw_atoms(self, atom_positions, atom_elements, atom_charges):
+            for step_idx, (x, y) in enumerate(points):
+                alpha = step_idx / (num_pts - 1) if num_pts > 1 else 0.5
+                curr_z = z1 + alpha * (z2 - z1)
+                scale = get_depth_scale(curr_z)
+                base_color = color1 if alpha < 0.5 else color2
+                bond_color = (
+                    int(base_color[0] * scale * 0.8),
+                    int(base_color[1] * scale * 0.8),
+                    int(base_color[2] * scale * 0.8)
+                )
+                self.set_pixel(x, y, bond_char, z=curr_z - 0.1, color=bond_color)
+
+    def draw_atoms(self, atom_positions, atom_elements, atom_charges, get_depth_scale=None):
+        if get_depth_scale is None:
+            get_depth_scale = lambda z: 1.0
+
         for i in range(len(atom_positions)):
             pos = atom_positions[i]
             element = atom_elements[i]
             x, y = int(pos[0]), int(pos[1])
             z = pos[2] if len(pos) > 2 else 0.0
 
-            self.set_pixel(x, y, element, z=z)
+            base_color = CPK_COLORS.get(element, DEFAULT_ATOM_COLOR)
+            scale = get_depth_scale(z)
+            atom_color = (
+                int(base_color[0] * scale),
+                int(base_color[1] * scale),
+                int(base_color[2] * scale)
+            )
+
+            cx, cy = self.map_coords(x, y)
+            for ch_offset, ch in enumerate(element):
+                self.set_pixel_cell(cx + ch_offset, cy, ch, z=z, color=atom_color)
 
             if atom_charges[i] != 0:
                 charge = atom_charges[i]
-                cx, cy = self.map_coords(x, y)
                 ch_x = cx - 1
                 ch_y = cy - 1
-                if 0 <= ch_x and ch_x + 3 < self.char_width and 0 <= ch_y < self.char_height:
-                    self.data[ch_y][ch_x] = '['
-                    self.data[ch_y][ch_x + 1] = '+' if charge > 0 else '-'
-                    self.data[ch_y][ch_x + 2] = str(abs(charge))
-                    self.data[ch_y][ch_x + 3] = ']'
+                sign_char = '+' if charge > 0 else '-'
+                sign_color = (255, 80, 80) if charge > 0 else (80, 160, 255)
+                bracket_color = (int(180 * scale), int(180 * scale), int(180 * scale))
+                num_color = (int(240 * scale), int(240 * scale), int(240 * scale))
+
+                self.set_pixel_cell(ch_x, ch_y, '[', z=z, color=bracket_color)
+                self.set_pixel_cell(ch_x + 1, ch_y, sign_char, z=z, color=sign_color)
+                self.set_pixel_cell(ch_x + 2, ch_y, str(abs(charge)), z=z, color=num_color)
+                self.set_pixel_cell(ch_x + 3, ch_y, ']', z=z, color=bracket_color)
 
 
 class ProteinCanvas(Canvas):

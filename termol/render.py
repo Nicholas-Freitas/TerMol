@@ -120,18 +120,23 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='braille', color='d
     atom_positions = scale_for_canvas(atom_positions, canvas)
     atom_positions[:, 1] /= canvas.aspect_ratio
 
-    atom_positions_2D = [(pos[0], pos[1]) for pos in atom_positions]
+    atom_positions_2D = [(pos[0], pos[1], 0.0) for pos in atom_positions]
+    bond_orders = getattr(molecule_data, 'bond_orders', None)
 
     canvas.clear()
-    canvas.draw_molecules(atom_positions_2D, atom_elements, atom_charges, bonds)
+    canvas.draw_molecules(atom_positions_2D, atom_elements, atom_charges, bonds, bond_orders=bond_orders)
 
-    if name:
-        header = f" {name} "
+    display_name = name or getattr(molecule_data, 'name', None)
+    if display_name:
+        header = f" {display_name} "
         if len(header) > canvas.char_width - 10:
             header = header[:canvas.char_width - 10] + "... "
-        print(header.center(canvas.char_width, "="))
+        print(f"\033[1;36m{header.center(canvas.char_width, '=')}\033[0m")
 
-    print(canvas)
+    if color == 'none':
+        print(canvas.render_plain())
+    else:
+        print(canvas.render_ansi())
 
 
 _RGB_256_CACHE = {}
@@ -927,17 +932,18 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
 
                     stretched = atom_positions.copy()
                     stretched[:, 1] /= canvas.aspect_ratio
-                    positions_2D = [(p[0], p[1]) for p in stretched]
+                    positions_3D = [(p[0], p[1], p[2]) for p in stretched]
+                    bond_orders = getattr(molecule_data, 'bond_orders', None)
 
                     canvas.clear()
-                    canvas.draw_molecules(positions_2D, atom_elements, atom_charges, bonds)
+                    canvas.draw_molecules(positions_3D, atom_elements, atom_charges, bonds, bond_orders=bond_orders)
 
-                    display_name = name or "Molecule"
+                    display_name = name or getattr(molecule_data, 'name', None) or "Molecule"
                     header_text = f" {display_name} [Small Mol | Arrows/WASD: steer | Space: pause | +/-: zoom | Q: quit] "
                     if len(header_text) > canvas.char_width - 6:
                         header_text = header_text[:canvas.char_width - 10] + "... "
                     header_line = header_text.center(canvas.char_width, "=")
-                    body = str(canvas)
+                    body = canvas.render_ansi()
 
                     fps_line = f"\033[1;32m{fps_str}\033[0m"
                     frame = f"\033[H\033[1;36m{header_line}\033[0m\n{fps_line}\n{body}"

@@ -8,8 +8,8 @@ def termol_cli():
     )
     parser.add_argument(
         'molecule_inputs', nargs='+',
-        help='One or more SMILES strings, PDB accession codes (e.g. 1ubq), or molecule files (.sdf, .mol, .pdb). '
-             'Separate with spaces. Can also be a text file (.txt) or CSV file (name, smiles/code).'
+        help='One or more SMILES strings, PDB accession codes (e.g. 1ubq), or molecule files (.sdf, .mol, .mol2, .pdb). '
+             'Separate with spaces. Can also be a text file (.txt) or CSV file (name, smiles/code/file).'
     )
     parser.add_argument('--names', nargs='+', help='Names for each molecule. Separate with spaces. Must be same length as inputs.')
     parser.add_argument('--show2D', action='store_true', help='Render static 2D view (default interactive 3D).')
@@ -72,6 +72,23 @@ def termol_cli():
                             names_list = [row[0]]
                         else:
                             names_list.append(row[0])
+        elif Path(input_item).suffix.lower() in ('.sdf', '.sd') and Path(input_item).exists():
+            # Expand multi-molecule SDF file into individual structures
+            try:
+                from rdkit import Chem
+                suppl = Chem.SDMolSupplier(input_item)
+                valid_mols = [m for m in suppl if m is not None]
+                if len(valid_mols) > 1:
+                    for idx, m in enumerate(valid_mols):
+                        molecules_list.append(m)
+                        m_name = m.GetProp('_Name') if m.HasProp('_Name') and m.GetProp('_Name').strip() else f"{Path(input_item).stem}_{idx + 1}"
+                        if names_list is None:
+                            names_list = []
+                        names_list.append(m_name)
+                    continue
+            except Exception:
+                pass
+            molecules_list.append(input_item)
         else:
             molecules_list.append(input_item)
 

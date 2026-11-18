@@ -389,4 +389,110 @@ def test_ansi_3d_viewer_small_mol_timeout():
     show_molecule_3D_ansi(mol_data, canvas, timeout=0.05, auto_resize=False)
 
 
+def test_molecule_canvas_cpk_colors_and_depth_cueing():
+    """Verify CPK element coloring and Z-depth cueing in MoleculeCanvas."""
+    from termol.canvas import MoleculeCanvas, CPK_COLORS
+
+    canvas = MoleculeCanvas(40, 20, 40.0, 20.0, aspect_ratio=2.0)
+    # 2 atoms: Oxygen at foreground (z=+5), Carbon at background (z=-5)
+    positions = [(0.0, 0.0, 5.0), (10.0, 0.0, -5.0)]
+    elements = ['O', 'C']
+    charges = [0, 0]
+    bonds = [(0, 1)]
+
+    canvas.draw_molecules(positions, elements, charges, bonds)
+    ansi_str = canvas.render_ansi()
+
+    # ANSI output should contain 24-bit TrueColor escape sequences
+    assert "\033[38;2;" in ansi_str
+    # Oxygen in foreground should have bright red component (> 200)
+    ox_cx, ox_cy = canvas.map_coords(0.0, 0.0)
+    ox_color = canvas.color_data[ox_cy][ox_cx]
+    assert ox_color is not None
+    r, g, b = ox_color
+    assert r > 200
+    assert g < 100
+    assert b < 100
+
+    # Carbon in background (z=-5) should be dimmed compared to full brightness
+    c_cx, c_cy = canvas.map_coords(10.0, 0.0)
+    c_color = canvas.color_data[c_cy][c_cx]
+    assert c_color is not None
+    # Base Carbon is ~195; at deep background (scale=0.40) it should be <= 120
+    assert c_color[0] < 140
+
+
+def test_load_sdf_file_support(tmp_path):
+    """Verify loading single and multi-molecule .sdf files preserves structures."""
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+    from termol.utilities import get_molecule_data
+
+    # Write a test SDF file with 3D coordinates
+    mol = Chem.MolFromSmiles('CC(=O)O')
+    AllChem.EmbedMolecule(mol)
+    sdf_file = str(tmp_path / "test_acetic_acid.sdf")
+    writer = Chem.SDWriter(sdf_file)
+    writer.write(mol)
+    writer.close()
+
+    mol_data = get_molecule_data(sdf_file, three_d=True)
+    assert not mol_data.is_protein
+    assert len(mol_data.atom_elements) == 4
+    assert 'O' in mol_data.atom_elements
+    assert len(mol_data.bonds) == 3
+
+
+def test_load_mol2_file_support(tmp_path):
+    """Verify loading Tripos .mol2 files preserves structures and coordinates."""
+    from termol.utilities import get_molecule_data
+
+    mol2_content = """@<TRIPOS>MOLECULE
+benzene
+6 6 0 0 0
+SMALL
+NO_CHARGES
+
+@<TRIPOS>ATOM
+1 C1 0.0000 1.3970 0.0000 C.ar 1 BENZ 0.0000
+2 C2 1.2098 0.6985 0.0000 C.ar 1 BENZ 0.0000
+3 C3 1.2098 -0.6985 0.0000 C.ar 1 BENZ 0.0000
+4 C4 0.0000 -1.3970 0.0000 C.ar 1 BENZ 0.0000
+5 C5 -1.2098 -0.6985 0.0000 C.ar 1 BENZ 0.0000
+6 C6 -1.2098 0.6985 0.0000 C.ar 1 BENZ 0.0000
+@<TRIPOS>BOND
+1 1 2 ar
+2 2 3 ar
+3 3 4 ar
+4 4 5 ar
+5 5 6 ar
+6 6 1 ar
+"""
+    mol2_file = str(tmp_path / "benzene.mol2")
+    with open(mol2_file, "w") as f:
+        f.write(mol2_content)
+
+    mol_data = get_molecule_data(mol2_file, three_d=True)
+    assert not mol_data.is_protein
+    assert len(mol_data.atom_elements) == 6
+    assert all(e == 'C' for e in mol_data.atom_elements)
+    assert len(mol_data.bonds) == 6
+
+
+def test_show_molecule_2d_truecolor(capsys):
+    """Verify 2D small-molecule rendering outputs TrueColor CPK ANSI."""
+    from termol.render import show_molecule_2D
+    from termol.canvas import MoleculeCanvas
+    from termol.utilities import get_molecule_data
+
+    mol_data = get_molecule_data("CCO", three_d=False)
+    canvas = MoleculeCanvas(40, 20, 40.0, 20.0, aspect_ratio=2.0)
+    show_molecule_2D(mol_data, canvas, name="Ethanol", color="cpk")
+
+    captured = capsys.readouterr().out
+    assert "Ethanol" in captured
+    assert "\033[38;2;" in captured  # TrueColor ANSI sequence
+
+
+
 
