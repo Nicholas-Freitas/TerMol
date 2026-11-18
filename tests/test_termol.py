@@ -101,10 +101,14 @@ def test_small_molecule_backward_compatibility():
 
 
 def test_draw_2d_runs_without_error(capsys):
-    # Small molecule
+    # Small molecule (defaults to high-res in 2D)
     termol.draw("c1ccccc1", three_d=False)
     out1 = capsys.readouterr().out
-    assert "C" in out1
+    assert any(0x2800 <= ord(ch) <= 0x28FF for ch in out1)
+
+    termol.draw("c1ccccc1", three_d=False, style='symbols')
+    out_sym = capsys.readouterr().out
+    assert "C" in out_sym
 
     # Protein sample
     structure = parse_pdb_text(SAMPLE_PDB)
@@ -582,14 +586,14 @@ def test_termol_cli_no_color_flag(monkeypatch, capsys):
     captured = capsys.readouterr().out
     assert "\033[38;2;" not in captured
     assert "\033[" not in captured
-    assert "C" in captured
+    assert "HIGH-RES" in captured
 
 
-def test_small_molecule_braille_style():
-    """Verify high-resolution Braille mode renders braille glyphs and heteroatom labels."""
+def test_small_molecule_high_res_style():
+    """Verify high-resolution mode renders braille glyphs and heteroatom labels."""
     from termol.canvas import MoleculeCanvas
 
-    canvas = MoleculeCanvas(60, 30, 60.0, 30.0, aspect_ratio=2.0, style='braille')
+    canvas = MoleculeCanvas(60, 30, 60.0, 30.0, aspect_ratio=2.0, style='high-res')
     # Ethanol: C-C-O
     positions = [(-10.0, 0.0, 0.0), (0.0, 0.0, 0.0), (10.0, 0.0, 0.0)]
     elements = ['C', 'C', 'O']
@@ -597,7 +601,7 @@ def test_small_molecule_braille_style():
     bonds = [(0, 1), (1, 2)]
     bond_orders = [1.0, 1.0]
 
-    canvas.draw_molecules(positions, elements, charges, bonds, bond_orders=bond_orders, style='braille')
+    canvas.draw_molecules(positions, elements, charges, bonds, bond_orders=bond_orders, style='high-res')
     plain = canvas.render_plain()
 
     # Heteroatom 'O' should be explicitly present
@@ -609,19 +613,38 @@ def test_small_molecule_braille_style():
     assert has_braille
 
 
-def test_termol_cli_braille_style(monkeypatch, capsys):
-    """Verify CLI invocation with --style braille."""
+def test_termol_cli_high_res_style(monkeypatch, capsys):
+    """Verify CLI invocation with --style high-res (and alias braille)."""
     import sys
     from termol.cli import termol_cli
 
-    monkeypatch.setattr(sys, 'argv', ['termol', 'CC(=O)O', '--show2D', '--style', 'braille'])
+    monkeypatch.setattr(sys, 'argv', ['termol', 'CC(=O)O', '--show2D', '--style', 'high-res'])
     termol_cli()
 
     captured = capsys.readouterr().out
-    assert "BRAILLE" in captured
+    assert "HIGH-RES" in captured
     assert "O" in captured
     has_braille = any(0x2800 <= ord(ch) <= 0x28FF for ch in captured)
     assert has_braille
+
+
+def test_protein_2d_default_cartoon_and_high_res(capsys):
+    """Verify protein 2D default representation is cartoon and default style is high-res."""
+    from termol.render import show_molecule_2D
+    from termol.canvas import MoleculeCanvas
+    structure = parse_pdb_text(SAMPLE_PDB)
+    mol_data = MoleculeData(
+        is_protein=True,
+        structure=structure,
+        backbone_segments=generate_backbone_points(structure, samples_per_res=4),
+        ligands=structure.ligands,
+        name="TestProtein"
+    )
+    c = MoleculeCanvas(80, 40, 80, 40, aspect_ratio=2.0)
+    show_molecule_2D(mol_data, c)
+    captured = capsys.readouterr().out
+    assert "CARTOON" in captured
+    assert "HIGH-RES" in captured
 
 
 

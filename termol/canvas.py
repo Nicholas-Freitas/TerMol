@@ -176,7 +176,10 @@ class MoleculeCanvas(Canvas):
     def __init__(self, char_width: int, char_height: int, width: float, height: float,
                  aspect_ratio: float = 2.0, style: str = 'symbols', color_mode: str = 'cpk'):
         super().__init__(char_width, char_height, width, height, aspect_ratio)
-        self.style = style.lower() if style else 'symbols'
+        if style and style.lower() in ('high-res', 'highres', 'hires', 'braille', 'subpixel'):
+            self.style = 'high-res'
+        else:
+            self.style = style.lower() if style else 'symbols'
         self.color_mode = color_mode.lower() if color_mode else 'cpk'
         self.bond_spacing = 3.0
 
@@ -251,7 +254,7 @@ class MoleculeCanvas(Canvas):
                 return 0.40 + 0.60 * t
             return 1.0
 
-        if active_style in ('braille', 'subpixel'):
+        if active_style in ('high-res', 'highres', 'hires', 'braille', 'subpixel'):
             self._draw_bonds_braille(atom_positions, bonds, atom_elements=atom_elements,
                                      bond_orders=bond_orders, color_mode=active_color,
                                      get_depth_scale=get_depth_scale)
@@ -613,14 +616,17 @@ class MoleculeCanvas(Canvas):
 
 class ProteinCanvas(Canvas):
     def __init__(self, char_width: int, char_height: int, width: float, height: float,
-                 aspect_ratio: float = 2.0, style: str = 'braille', color_mode: str = 'depth'):
+                 aspect_ratio: float = 2.0, style: str = 'high-res', color_mode: str = 'depth'):
         """
         Interactive Protein Canvas with Z-buffering, depth cueing, and Braille support.
-        style: 'braille' (default subpixel dots) or 'ascii' (density ramp)
+        style: 'high-res' (default subpixel dots) or 'ascii' (density ramp)
         color_mode: 'depth' (default), 'rainbow', 'ss', or 'none'
         """
         super().__init__(char_width, char_height, width, height, aspect_ratio)
-        self.style = style.lower()
+        if style and style.lower() in ('high-res', 'highres', 'hires', 'braille', 'subpixel'):
+            self.style = 'high-res'
+        else:
+            self.style = style.lower() if style else 'high-res'
         self.color_mode = color_mode.lower()
 
         # Braille subpixel grid (2 horizontal dots x 4 vertical dots per character cell)
@@ -675,7 +681,7 @@ class ProteinCanvas(Canvas):
         self.last_z_min = z_min
         self.last_z_range = z_range
 
-        if self.style == 'braille':
+        if self.style in ('high-res', 'highres', 'hires', 'braille', 'subpixel'):
             self._draw_protein_braille(backbone_segments, ligands, z_min, z_range)
         else:
             self._draw_protein_ascii(backbone_segments, ligands, z_min, z_range)

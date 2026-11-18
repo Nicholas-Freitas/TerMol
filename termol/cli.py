@@ -20,8 +20,8 @@ def termol_cli():
     parser.add_argument('--timeout', type=int, default=None, help='3D window will close after this number of seconds (default indefinitely).')
     parser.add_argument(
         '--style', default=None,
-        help='Rendering style: for small molecules: "symbols" (chemical symbols, default), "balls" (spherical ball-and-stick), or "braille" (high-res subpixel line drawing); '
-             'for proteins: "braille" (subpixel dots, default) or "ascii".'
+        help='Rendering style: for small molecules: "high-res" (default in 2D), "symbols" (default in 3D), or "balls"; '
+             'for proteins: "high-res" (default) or "ascii".'
     )
     parser.add_argument(
         '--color', default=None,
@@ -33,8 +33,8 @@ def termol_cli():
         help='Disable ANSI TrueColor escape sequences and render in monochrome text.'
     )
     parser.add_argument(
-        '--rep', '--representation', dest='rep', choices=['trace', 'cartoon', 'ribbon', 'tube'], default='trace',
-        help='Representation for proteins: "trace" (1D spline line, default), "cartoon"/"ribbon" (secondary structure ribbons & arrowheads), or "tube" (3D uniform thickness).'
+        '--rep', '--representation', dest='rep', choices=['trace', 'cartoon', 'ribbon', 'tube'], default=None,
+        help='Representation for proteins: "cartoon" (default in 2D), "trace" (1D spline line, default in 3D), "ribbon", or "tube".'
     )
     parser.add_argument(
         '--backend', choices=['ansi', 'curses'], default='ansi',
@@ -105,6 +105,11 @@ def termol_cli():
         raise ValueError('Number of names must match number of molecules.')
 
     three_d = not args.show2D
+
+    if args.rep is None:
+        args.rep = 'trace' if three_d else 'cartoon'
+    if args.style is None and not three_d:
+        args.style = 'high-res'
 
     draw_multi(
         molecules_list,
