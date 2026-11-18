@@ -297,6 +297,14 @@ class ProteinCanvas(Canvas):
         if self.color_mode == 'none':
             return None
 
+        # Clamp z_norm strictly to [0.0, 1.0] to prevent negative roots or float overflow
+        if z_norm <= 0.0:
+            z_norm = 0.0
+        elif z_norm >= 1.0:
+            z_norm = 1.0
+        else:
+            z_norm = float(z_norm)
+
         # Depth luminance scaling: closer = brighter
         val_depth = 0.35 + 0.65 * z_norm
 
@@ -336,14 +344,14 @@ class ProteinCanvas(Canvas):
             k1 = (185, 45, 145)     # vibrant magenta
             k2 = (255, 238, 200)    # warm golden white
             if z_norm < 0.55:
-                t = (z_norm / 0.55) ** 1.2
+                t = max(0.0, z_norm / 0.55) ** 1.2
                 return (
                     int(k0[0] + (k1[0] - k0[0]) * t),
                     int(k0[1] + (k1[1] - k0[1]) * t),
                     int(k0[2] + (k1[2] - k0[2]) * t)
                 )
             else:
-                t = ((z_norm - 0.55) / 0.45) ** 0.9
+                t = max(0.0, min(1.0, (z_norm - 0.55) / 0.45)) ** 0.9
                 return (
                     int(k1[0] + (k2[0] - k1[0]) * t),
                     int(k1[1] + (k2[1] - k1[1]) * t),
@@ -356,14 +364,14 @@ class ProteinCanvas(Canvas):
             k1 = (35, 185, 230)     # vibrant electric cyan
             k2 = (235, 252, 255)    # glowing cyan-white
             if z_norm < 0.60:
-                t = (z_norm / 0.60) ** 1.3
+                t = max(0.0, z_norm / 0.60) ** 1.3
                 return (
                     int(k0[0] + (k1[0] - k0[0]) * t),
                     int(k0[1] + (k1[1] - k0[1]) * t),
                     int(k0[2] + (k1[2] - k0[2]) * t)
                 )
             else:
-                t = ((z_norm - 0.60) / 0.40) ** 0.85
+                t = max(0.0, min(1.0, (z_norm - 0.60) / 0.40)) ** 0.85
                 return (
                     int(k1[0] + (k2[0] - k1[0]) * t),
                     int(k1[1] + (k2[1] - k1[1]) * t),
