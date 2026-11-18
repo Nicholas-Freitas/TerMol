@@ -577,6 +577,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
 MOUSE_SGR_PATTERN = re.compile(r'\x1b\[<(\d+);(\d+);(\d+)([Mm])')
 CSI_PATTERN = re.compile(r'\x1b\[[0-9;?<=]*[a-zA-Z~]')
 INCOMPLETE_CSI_PATTERN = re.compile(r'\x1b\[[0-9;?<=]*$')
+INCOMPLETE_ESC_PATTERN = re.compile(r'\x1b(\[[0-9;?<=]*)?$')
 
 
 class AnsiTerminalSession:
@@ -611,9 +612,9 @@ class AnsiTerminalSession:
                 if kernel32.GetConsoleMode(h_in, ctypes.byref(in_m)):
                     self.h_in = h_in
                     self.orig_in_mode = in_m.value
-                    # ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200, ENABLE_WINDOW_INPUT = 0x0010, ENABLE_EXTENDED_FLAGS = 0x0080
+                    # ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200, ENABLE_WINDOW_INPUT = 0x0008, ENABLE_MOUSE_INPUT = 0x0010, ENABLE_EXTENDED_FLAGS = 0x0080
                     # Clear ENABLE_QUICK_EDIT_MODE (0x0040) so mouse clicks are not intercepted for text selection
-                    new_in = (self.orig_in_mode | 0x0200 | 0x0010 | 0x0080) & ~0x0040
+                    new_in = (self.orig_in_mode | 0x0200 | 0x0010 | 0x0008 | 0x0080) & ~0x0040
                     kernel32.SetConsoleMode(h_in, new_in)
             except Exception:
                 pass
@@ -630,11 +631,11 @@ class AnsiTerminalSession:
         # \033[?1049h: Alternate screen buffer
         # \033[?25l: Hide cursor
         # \033[2J\033[H: Clear screen & move cursor to top-left
-        # \033[?1000h: Normal mouse tracking
         # \033[?1002h: Button-motion tracking (reports movement when dragging)
+        # \033[?1003h: Any-event tracking (reports all motion)
         # \033[?1006h: SGR extended coordinates mode
         try:
-            sys.stdout.write("\033[?1049h\033[?25l\033[2J\033[H\033[?1000h\033[?1002h\033[?1006h")
+            sys.stdout.write("\033[?1049h\033[?25l\033[2J\033[H\033[?1002h\033[?1003h\033[?1006h")
             sys.stdout.flush()
         except Exception:
             pass
@@ -643,7 +644,7 @@ class AnsiTerminalSession:
     def __exit__(self, exc_type, exc_val, exc_tb):
         # Disable mouse tracking, show cursor, switch back to main screen buffer
         try:
-            sys.stdout.write("\033[?1006l\033[?1002l\033[?1000l\033[?25h\033[?1049l")
+            sys.stdout.write("\033[?1006l\033[?1003l\033[?1002l\033[?1000l\033[?25h\033[?1049l")
             sys.stdout.flush()
         except Exception:
             pass
@@ -666,7 +667,7 @@ class AnsiTerminalSession:
 
 
 def read_available_input() -> str:
-    """Read any pending characters from stdin non-blockingly."""
+    """Read any pending characters from stdin non-blockingly, assembling complete escape sequences."""
     chars = []
     if sys.platform == 'win32':
         import msvcrt
@@ -685,8 +686,15 @@ def read_available_input() -> str:
                         chars.append('\x1b[D')
                 else:
                     chars.append(c)
-            if chars and chars[-1] == '\x1b':
-                time.sleep(0.003)
+
+            # Assemble any in-flight escape sequence so mouse packets are never split
+            for _ in range(5):
+                raw = "".join(chars)
+                if not INCOMPLETE_ESC_PATTERN.search(raw):
+                    break
+                time.sleep(0.002)
+                if not msvcrt.kbhit():
+                    break
                 while msvcrt.kbhit():
                     chars.append(msvcrt.getwch())
         except Exception:
@@ -697,63 +705,25 @@ def read_available_input() -> str:
             while select.select([sys.stdin], [], [], 0)[0]:
                 c = sys.stdin.read(1)
                 chars.append(c)
-            if chars and chars[-1] == '\x1b':
-                time.sleep(0.003)
-                while select.select([sys.stdin], [], [], 0)[0]:
+            for _ in range(5):
+                raw = "".join(chars)
+                if not INCOMPLETE_ESC_PATTERN.search(raw):
+                    break
+                time.sleep(0.002)
+                if select.select([sys.stdin], [], [], 0)[0]:
                     chars.append(sys.stdin.read(1))
+                else:
+                    break
         except Exception:
             pass
     return "".join(chars)
 
 
-def render_diff(curr_data: List[List[str]],
-                curr_color: List[List[Optional[Tuple[int, int, int]]]],
-                prev_grid: List[List[Tuple[str, Optional[Tuple[int, int, int]]]]],
-                char_width: int,
-                char_height: int) -> str:
-    """
-    Generate minimal ANSI sequence updating only cells that changed since prev_grid.
-    Updates prev_grid in-place.
-    Canvas row cy maps to terminal line (cy + 2) (line 1 is the header).
-    Canvas col cx maps to terminal column (cx + 1).
-    """
-    diff_parts = []
-    for cy in range(char_height):
-        cx = 0
-        while cx < char_width:
-            c_char = curr_data[cy][cx]
-            c_col = curr_color[cy][cx]
-            p_char, p_col = prev_grid[cy][cx]
-
-            if c_char != p_char or c_col != p_col:
-                run_start = cx
-                run_chars = []
-                while cx < char_width:
-                    ch = curr_data[cy][cx]
-                    col = curr_color[cy][cx]
-                    pch, pcol = prev_grid[cy][cx]
-                    if ch == pch and col == pcol:
-                        break
-                    prev_grid[cy][cx] = (ch, col)
-                    if col is not None and ch != ' ':
-                        r, g, b = col
-                        run_chars.append(f"\033[38;2;{r};{g};{b}m{ch}\033[0m")
-                    else:
-                        run_chars.append(ch)
-                    cx += 1
-                diff_parts.append(f"\033[{cy + 2};{run_start + 1}H{''.join(run_chars)}")
-            else:
-                cx += 1
-    return "".join(diff_parts)
-
-
 def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
-                          auto_resize=True, style='braille', color='depth', rep='trace',
-                          diff_mode=False):
+                          auto_resize=True, style='braille', color='depth', rep='trace'):
     """
     Interactive 3D TrueColor ANSI renderer with mouse click-drag rotation and scroll zoom.
     Directly streams 24-bit RGB ANSI escape sequences, completely bypassing curses.
-    Supports differential buffer updates (toggle with 'U' or diff_mode=True) and live FPS counter.
     """
     is_protein = isinstance(molecule_data, MoleculeData) and molecule_data.is_protein
 
@@ -764,7 +734,7 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
         term_width, term_height = canvas.char_width, canvas.char_height
 
     if auto_resize:
-        canvas.resize_canvas(term_width, max(10, term_height - 2))
+        canvas.resize_canvas(term_width, max(10, term_height - 3))
 
     if is_protein:
         active_style = style
@@ -900,8 +870,6 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
 
     fps_history = []
     last_frame_time = time.perf_counter()
-    prev_grid = None
-    need_full_redraw = True
 
     try:
         with AnsiTerminalSession():
@@ -917,7 +885,6 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
 
                 fps_val = sum(fps_history) / len(fps_history) if fps_history else 0.0
                 fps_str = f"[{fps_val:4.1f} FPS]"
-                diff_str = f"[DIFF: {'ON' if diff_mode else 'OFF'} (U)]"
 
                 # Check terminal size
                 if auto_resize:
@@ -926,12 +893,10 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                         cw, ch = curr_ts.columns, curr_ts.lines
                         if cw != term_width or ch != term_height:
                             term_width, term_height = cw, ch
-                            canvas.resize_canvas(term_width, max(10, term_height - 2))
+                            canvas.resize_canvas(term_width, max(10, term_height - 3))
                             if is_protein:
-                                protein_canvas.resize_canvas(term_width, max(10, term_height - 2))
+                                protein_canvas.resize_canvas(term_width, max(10, term_height - 3))
                             sys.stdout.write("\033[2J")
-                            need_full_redraw = True
-                            prev_grid = None
                     except Exception:
                         pass
 
@@ -959,49 +924,22 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
 
                     display_name = name or molecule_data.name or "Protein"
                     res_num = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
-                    cw = protein_canvas.char_width
+                    header_text = f" {display_name} ({res_num} res) [{active_rep.upper()} (M) | {active_style.upper()} (B) | {active_color.upper()} (C) | Drag: rotate | Scroll: zoom] "
+                    if len(header_text) > protein_canvas.char_width - 6:
+                        header_text = f" {display_name} [{active_rep.upper()} | {active_style.upper()} | {active_color.upper()}] "
+                    if len(header_text) > protein_canvas.char_width - 6:
+                        header_text = header_text[:protein_canvas.char_width - 10] + "... "
+                    header_line = header_text.center(protein_canvas.char_width, "=")
 
-                    header_left = f" {fps_str} {diff_str} {display_name} ({res_num} res) "
-                    header_right = f" [{active_rep.upper()} (M) | {active_style.upper()} (B) | {active_color.upper()} (C)] "
-                    if len(header_left) + len(header_right) <= cw:
-                        pad = cw - len(header_left) - len(header_right)
-                        header_line = header_left + ("=" * pad) + header_right
+                    if active_color == 'none':
+                        body = protein_canvas.render_plain()
                     else:
-                        compact_right = f" [{active_rep.upper()}|{active_style.upper()}|{active_color.upper()}] "
-                        if len(header_left) + len(compact_right) <= cw:
-                            pad = cw - len(header_left) - len(compact_right)
-                            header_line = header_left + ("=" * pad) + compact_right
-                        else:
-                            combined = f"{fps_str} {diff_str} {display_name}"
-                            header_line = combined[:cw].ljust(cw, "=")
+                        body = protein_canvas.render_ansi()
 
-                    if diff_mode and not need_full_redraw and prev_grid is not None:
-                        # Differential screen update
-                        sys.stdout.write(f"\033[1;1H\033[1;36m{header_line}\033[0m")
-                        diff_output = render_diff(
-                            protein_canvas.data,
-                            protein_canvas.color_data,
-                            prev_grid,
-                            protein_canvas.char_width,
-                            protein_canvas.char_height
-                        )
-                        if diff_output:
-                            sys.stdout.write(diff_output)
-                        sys.stdout.flush()
-                    else:
-                        # Full screen refresh
-                        if active_color == 'none':
-                            body = protein_canvas.render_plain()
-                        else:
-                            body = protein_canvas.render_ansi()
-
-                        frame = f"\033[H\033[1;36m{header_line}\033[0m\n{body}"
-                        sys.stdout.write(frame)
-                        sys.stdout.flush()
-                        prev_grid = [[(protein_canvas.data[r][c], protein_canvas.color_data[r][c])
-                                      for c in range(protein_canvas.char_width)]
-                                     for r in range(protein_canvas.char_height)]
-                        need_full_redraw = False
+                    fps_line = f"\033[1;32m{fps_str}\033[0m"
+                    frame = f"\033[H\033[1;36m{header_line}\033[0m\n{fps_line}\n{body}"
+                    sys.stdout.write(frame)
+                    sys.stdout.flush()
                 else:
                     # Small molecule
                     if not rotation_paused and not dragging:
@@ -1015,39 +953,16 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                     canvas.draw_molecules(positions_2D, atom_elements, atom_charges, bonds)
 
                     display_name = name or "Molecule"
-                    cw = canvas.char_width
-                    header_left = f" {fps_str} {diff_str} {display_name} [Small Mol] "
-                    header_right = " [Drag: rotate | Scroll: zoom] "
-                    if len(header_left) + len(header_right) <= cw:
-                        pad = cw - len(header_left) - len(header_right)
-                        header_line = header_left + ("=" * pad) + header_right
-                    else:
-                        combined = f"{fps_str} {diff_str} {display_name}"
-                        header_line = combined[:cw].ljust(cw, "=")
+                    header_text = f" {display_name} [Small Mol | Drag: rotate | Scroll: zoom] "
+                    if len(header_text) > canvas.char_width - 6:
+                        header_text = header_text[:canvas.char_width - 10] + "... "
+                    header_line = header_text.center(canvas.char_width, "=")
+                    body = str(canvas)
 
-                    if diff_mode and not need_full_redraw and prev_grid is not None:
-                        # Differential screen update
-                        sys.stdout.write(f"\033[1;1H\033[1;36m{header_line}\033[0m")
-                        diff_output = render_diff(
-                            canvas.data,
-                            canvas.color_data,
-                            prev_grid,
-                            canvas.char_width,
-                            canvas.char_height
-                        )
-                        if diff_output:
-                            sys.stdout.write(diff_output)
-                        sys.stdout.flush()
-                    else:
-                        # Full screen refresh
-                        body = str(canvas)
-                        frame = f"\033[H\033[1;36m{header_line}\033[0m\n{body}"
-                        sys.stdout.write(frame)
-                        sys.stdout.flush()
-                        prev_grid = [[(canvas.data[r][c], canvas.color_data[r][c])
-                                      for c in range(canvas.char_width)]
-                                     for r in range(canvas.char_height)]
-                        need_full_redraw = False
+                    fps_line = f"\033[1;32m{fps_str}\033[0m"
+                    frame = f"\033[H\033[1;36m{header_line}\033[0m\n{fps_line}\n{body}"
+                    sys.stdout.write(frame)
+                    sys.stdout.flush()
 
                 # Non-blocking input loop
                 time.sleep(0.025)
@@ -1063,15 +978,7 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                         act = m.group(4)
 
                         if act == 'M':
-                            if btn == 0:
-                                dragging = True
-                                last_mouse_pos = (col, row)
-                                rotation_paused = True
-                            elif btn == 32 and dragging and last_mouse_pos is not None:
-                                total_dx += (col - last_mouse_pos[0])
-                                total_dy += (row - last_mouse_pos[1])
-                                last_mouse_pos = (col, row)
-                            elif btn == 64:
+                            if btn == 64:
                                 if is_protein:
                                     apply_protein_zoom(1.05)
                                 else:
@@ -1081,7 +988,21 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                                     apply_protein_zoom(0.95)
                                 else:
                                     apply_mol_zoom(0.95)
-                        elif act == 'm' and btn == 0:
+                            elif not dragging and ((btn & 3) == 0 or btn == 0 or btn == 32):
+                                # Click down or drag started with left button
+                                dragging = True
+                                last_mouse_pos = (col, row)
+                                rotation_paused = True
+                            elif dragging and last_mouse_pos is not None:
+                                # Mouse motion while holding button down
+                                dx = col - last_mouse_pos[0]
+                                dy = row - last_mouse_pos[1]
+                                if dx != 0 or dy != 0:
+                                    total_dx += dx
+                                    total_dy += dy
+                                    last_mouse_pos = (col, row)
+                        elif act == 'm':
+                            # Button released
                             dragging = False
                             last_mouse_pos = None
 
@@ -1117,9 +1038,6 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                             return
                         elif ch == ' ':
                             rotation_paused = not rotation_paused
-                        elif ch in ('u', 'U'):
-                            diff_mode = not diff_mode
-                            need_full_redraw = True
                         elif ch in ('a', 'A'):
                             rotation_axis = (0, 1, 0)
                             rotation_paused = False
@@ -1149,15 +1067,12 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                             idx = rep_modes.index(active_rep) if active_rep in rep_modes else 0
                             active_rep = rep_modes[(idx + 1) % len(rep_modes)]
                             segments = get_segments(active_rep)
-                            need_full_redraw = True
                         elif ch in ('c', 'C') and is_protein:
                             idx = color_modes.index(active_color)
                             active_color = color_modes[(idx + 1) % len(color_modes)]
-                            need_full_redraw = True
                         elif ch in ('b', 'B') and is_protein:
                             idx = styles.index(active_style)
                             active_style = styles[(idx + 1) % len(styles)]
-                            need_full_redraw = True
 
                 if timeout and time.time() > end_time and not rotation_paused:
                     break
@@ -1168,7 +1083,7 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
 
 def draw(input_mol, name=None, width=80, height=40, three_d=True,
          add_hydrogens=False, timeout=None, stdscr=None, auto_resize=True,
-         style='braille', color='depth', rep='trace', backend='ansi', diff_mode=False):
+         style='braille', color='depth', rep='trace', backend='ansi'):
     """
     Main function for TerMol. Renders small molecules or protein structures in 2D or 3D.
     Inputs:
@@ -1181,7 +1096,6 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
         color: For proteins: 'depth' (default luminance ramp), 'rainbow' (N->C), 'ss' (secondary structure), or 'none'.
         rep: For proteins: 'trace' (default 1D line), 'cartoon'/'ribbon' (flat ribbons and arrows), or 'tube'.
         backend: Interactive 3D backend: 'ansi' (default, 24-bit TrueColor with mouse drag/scroll) or 'curses' (legacy curses).
-        diff_mode: Enable differential buffer updates in ANSI mode (default False, toggle with 'U').
     """
     if three_d:
         if backend == 'curses':
@@ -1191,8 +1105,7 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
         else:
             draw_persistent(None, input_mol, name=name, width=width, height=height,
                             three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
-                            auto_resize=auto_resize, style=style, color=color, rep=rep, backend='ansi',
-                            diff_mode=diff_mode)
+                            auto_resize=auto_resize, style=style, color=color, rep=rep, backend='ansi')
     else:
         draw_persistent(None, input_mol, name=name, width=width, height=height,
                         three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
@@ -1202,7 +1115,7 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
 def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
                     three_d=True, add_hydrogens=False, timeout=None,
                     auto_resize=True, style='braille', color='depth', rep='trace',
-                    backend='ansi', diff_mode=False):
+                    backend='ansi'):
     """Persistent wrapper for draw supporting both ANSI and curses backends."""
     molecule_data = get_molecule_data(input_mol, three_d=three_d, add_hydrogens=add_hydrogens, representation=rep)
     canvas = MoleculeCanvas(width, height, float(width), float(height), aspect_ratio=2.0)
@@ -1217,15 +1130,14 @@ def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
                                timeout=timeout, auto_resize=auto_resize, style=style, color=color, rep=rep)
         else:
             show_molecule_3D_ansi(molecule_data, canvas, name=name, timeout=timeout,
-                                  auto_resize=auto_resize, style=style, color=color, rep=rep,
-                                  diff_mode=diff_mode)
+                                  auto_resize=auto_resize, style=style, color=color, rep=rep)
     else:
         show_molecule_2D(molecule_data, canvas, name=name, style=style, color=color, rep=rep)
 
 
 def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
                add_hydrogens=False, timeout=None, auto_resize=True,
-               style='braille', color='depth', rep='trace', backend='ansi', diff_mode=False):
+               style='braille', color='depth', rep='trace', backend='ansi'):
     """Render multiple molecules or proteins in sequence."""
     if names and len(names) != len(input_mols):
         raise ValueError("The number of names must match the number of inputs!")
@@ -1260,8 +1172,7 @@ def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
             draw_persistent(None, input_mols[i], name=names[i], timeout=timeout,
                             width=width, height=height, three_d=three_d,
                             add_hydrogens=add_hydrogens, auto_resize=auto_resize,
-                            style=style, color=color, rep=rep, backend='ansi',
-                            diff_mode=diff_mode)
+                            style=style, color=color, rep=rep, backend='ansi')
 
 
 def showcase(timeout=5, width=80, height=40):

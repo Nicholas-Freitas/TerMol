@@ -393,37 +393,6 @@ def test_ansi_3d_viewer_small_mol_timeout():
     show_molecule_3D_ansi(mol_data, canvas, timeout=0.05, auto_resize=False)
 
 
-def test_render_diff_dirty_and_clean():
-    """Verify differential screen updates generate minimal cursor moves and 0 bytes when unchanged."""
-    from termol.render import render_diff
-
-    char_w, char_h = 20, 10
-    prev_grid = [[(' ', None) for _ in range(char_w)] for _ in range(char_h)]
-    curr_data = [[' ' for _ in range(char_w)] for _ in range(char_h)]
-    curr_color = [[None for _ in range(char_w)] for _ in range(char_h)]
-
-    # Frame 0: grid is all blank, matches prev_grid
-    diff0 = render_diff(curr_data, curr_color, prev_grid, char_w, char_h)
-    assert diff0 == ""
-
-    # Frame 1: place a character with color at cy=2, cx=5 (terminal line 4, col 6)
-    curr_data[2][5] = '*'
-    curr_color[2][5] = (255, 100, 50)
-    diff1 = render_diff(curr_data, curr_color, prev_grid, char_w, char_h)
-    assert "\033[4;6H" in diff1
-    assert "\033[38;2;255;100;50m*\033[0m" in diff1
-
-    # Frame 2: identical to Frame 1 -> prev_grid is up to date, 0 bytes emitted
-    diff2 = render_diff(curr_data, curr_color, prev_grid, char_w, char_h)
-    assert diff2 == ""
-
-    # Frame 3: cell cleared back to space
-    curr_data[2][5] = ' '
-    curr_color[2][5] = None
-    diff3 = render_diff(curr_data, curr_color, prev_grid, char_w, char_h)
-    assert "\033[4;6H " in diff3
-
-
 def test_escape_sequence_parsing_no_premature_quit():
     """Verify mouse events and escape sequences do not prematurely trigger viewer exit."""
     from termol.render import CSI_PATTERN, INCOMPLETE_CSI_PATTERN
@@ -434,7 +403,6 @@ def test_escape_sequence_parsing_no_premature_quit():
     raw_arrow = "\x1b[A"
     raw_quit_key = "q"
     raw_esc_key = "\x1b"
-    raw_toggle_u = "u"
 
     # Drag stream: should strip completely, leaving no characters
     cleaned_drag = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_drag))
@@ -457,45 +425,48 @@ def test_escape_sequence_parsing_no_premature_quit():
     cleaned_q = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_quit_key))
     assert any(c in ('q', 'Q', 'x', 'X') for c in cleaned_q)
 
-    # Diff toggle key 'u': recognized
-    cleaned_u = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_toggle_u))
-    assert 'u' in cleaned_u
 
+def test_mouse_click_hold_drag_events():
+    """Verify stationary click, hold, drag motion, and release tracking."""
+    from termol.render import MOUSE_SGR_PATTERN
 
-def test_cli_diff_argument():
-    """Verify --diff flag is supported by termol_cli parser."""
-    import argparse
-    from termol.cli import termol_cli
-    import sys
+    # Sequence:
+    # 1. Left button down at (40, 20)
+    # 2. Drag to (43, 22)
+    # 3. Release button at (43, 22)
+    events = "\x1b[<0;40;20M\x1b[<32;43;22M\x1b[<0;43;22m"
 
-    # Test parser with --diff
-    orig_argv = sys.argv
-    try:
-        sys.argv = ['termol', '1ubq', '--diff', '--timeout', '1']
-        # Mock draw_multi so it does not block or execute
-        import termol.cli as cli_mod
-        called_args = {}
-        def mock_draw_multi(*args, **kwargs):
-            called_args.update(kwargs)
-        orig_dm = cli_mod.draw_multi
-        cli_mod.draw_multi = mock_draw_multi
-        try:
-            cli_mod.termol_cli()
-            assert called_args.get('diff_mode') is True
-        finally:
-            cli_mod.draw_multi = orig_dm
-    finally:
-        sys.argv = orig_argv
+    dragging = False
+    last_mouse_pos = None
+    total_dx = 0
+    total_dy = 0
 
+    for m in MOUSE_SGR_PATTERN.finditer(events):
+        btn = int(m.group(1))
+        col = int(m.group(2))
+        row = int(m.group(3))
+        act = m.group(4)
 
-def test_ansi_3d_viewer_diff_mode_timeout():
-    """Verify ANSI 3D viewer executes cleanly with diff_mode=True."""
-    from termol.render import show_molecule_3D_ansi
-    from termol.canvas import MoleculeCanvas
-    from termol.utilities import get_molecule_data
+        if act == 'M':
+            if not dragging and ((btn & 3) == 0 or btn == 0 or btn == 32):
+                dragging = True
+                last_mouse_pos = (col, row)
+            elif dragging and last_mouse_pos is not None:
+                dx = col - last_mouse_pos[0]
+                dy = row - last_mouse_pos[1]
+                if dx != 0 or dy != 0:
+                    total_dx += dx
+                    total_dy += dy
+                    last_mouse_pos = (col, row)
+        elif act == 'm':
+            dragging = False
+            last_mouse_pos = None
 
-    mol_data = get_molecule_data("1ubq", three_d=True)
-    canvas = MoleculeCanvas(60, 30, 60.0, 30.0, aspect_ratio=2.0)
-    show_molecule_3D_ansi(mol_data, canvas, timeout=0.05, auto_resize=False, diff_mode=True)
+    # Total movement should be dx=+3, dy=+2, and dragging should be False after release
+    assert total_dx == 3
+    assert total_dy == 2
+    assert dragging is False
+    assert last_mouse_pos is None
+
 
 
