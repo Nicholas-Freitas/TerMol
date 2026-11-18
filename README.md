@@ -40,7 +40,7 @@ Additional arguments include:
 - `--width, --height`: The size of the 'screen' (in number of characters) Default 80x40. In the 3D viewer, if width and height aren't specified, the viewer will resize to fill the terminal window.
 - `--show2D`: Display in 2D instead of 3D.
 - `--rep, --representation`: For proteins: `trace` (1D Catmull-Rom spline, default), `cartoon` or `ribbon` (secondary structure flat ribbons and arrowheads), or `tube` (uniform 3D thickness).
-- `--style`: For proteins: `ascii` (depth ramp, default) or `braille` (high-resolution subpixel curves).
+- `--style`: For proteins: `braille` (high-resolution subpixel curves, default) or `ascii` (depth ramp).
 - `--color`: For proteins: `depth` (default luminance depth cueing), `rainbow` (N-to-C spectrum), `ss` (secondary structure: helices/sheets/loops), or `none`.
 - `--add_hydrogens`: Have RDKit attempt to add hydrogens automatically. Default False.
 - `--timeout`: In the 3D viewer, this will automatically close after this number of seconds. Default None, which allows the viewer to stay open indefinitely.

@@ -232,10 +232,10 @@ class MoleculeCanvas(Canvas):
 
 class ProteinCanvas(Canvas):
     def __init__(self, char_width: int, char_height: int, width: float, height: float,
-                 aspect_ratio: float = 2.0, style: str = 'ascii', color_mode: str = 'depth'):
+                 aspect_ratio: float = 2.0, style: str = 'braille', color_mode: str = 'depth'):
         """
         Interactive Protein Canvas with Z-buffering, depth cueing, and Braille support.
-        style: 'ascii' (default density ramp) or 'braille' (subpixel dots)
+        style: 'braille' (default subpixel dots) or 'ascii' (density ramp)
         color_mode: 'depth' (default), 'rainbow', 'ss', or 'none'
         """
         super().__init__(char_width, char_height, width, height, aspect_ratio)

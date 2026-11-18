@@ -18,8 +18,8 @@ def termol_cli():
     parser.add_argument('--add_hydrogens', action='store_true', help='Add hydrogens to small molecules via RDKit (default False).')
     parser.add_argument('--timeout', type=int, default=None, help='3D window will close after this number of seconds (default indefinitely).')
     parser.add_argument(
-        '--style', choices=['ascii', 'braille'], default='ascii',
-        help='Rendering style for proteins: "ascii" (depth ramp, default) or "braille" (high-resolution subpixel dots).'
+        '--style', choices=['ascii', 'braille'], default='braille',
+        help='Rendering style for proteins: "braille" (high-resolution subpixel dots, default) or "ascii" (density ramp).'
     )
     parser.add_argument(
         '--color', choices=['depth', 'rainbow', 'ss', 'none'], default='depth',

@@ -61,7 +61,7 @@ def scale_protein_for_canvas(backbone_segments: List[List[BackbonePoint]], ligan
     return float(scale)
 
 
-def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='depth', rep='trace'):
+def show_molecule_2D(molecule_data, canvas, name=None, style='braille', color='depth', rep='trace'):
     """Render a static 2D snapshot of a small molecule or protein."""
     # Ensure stdout handles UTF-8 safely (e.g. for Braille)
     if hasattr(sys.stdout, 'reconfigure'):
@@ -131,7 +131,7 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='dep
 
 
 def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
-                     auto_resize=True, style='ascii', color='depth', rep='trace'):
+                     auto_resize=True, style='braille', color='depth', rep='trace'):
     """Interactive 3D curses renderer for small molecules and macromolecules."""
     curses.curs_set(0)
     stdscr.nodelay(1)
@@ -422,7 +422,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
 
 def draw(input_mol, name=None, width=80, height=40, three_d=True,
          add_hydrogens=False, timeout=None, stdscr=None, auto_resize=True,
-         style='ascii', color='depth', rep='trace'):
+         style='braille', color='depth', rep='trace'):
     """
     Main function for TerMol. Renders small molecules or protein structures in 2D or 3D.
     Inputs:
@@ -431,7 +431,7 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
         width: Canvas width in characters (default 80).
         height: Canvas height in characters (default 40).
         three_d: Whether to display interactive 3D viewer (default True).
-        style: For proteins: 'ascii' (default density ramp) or 'braille' (subpixel dots).
+        style: For proteins: 'braille' (subpixel dots, default) or 'ascii' (density ramp).
         color: For proteins: 'depth' (default luminance ramp), 'rainbow' (N->C), 'ss' (secondary structure), or 'none'.
         rep: For proteins: 'trace' (default 1D line), 'cartoon'/'ribbon' (flat ribbons and arrows), or 'tube'.
     """
@@ -447,7 +447,7 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
 
 def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
                     three_d=True, add_hydrogens=False, timeout=None,
-                    auto_resize=True, style='ascii', color='depth', rep='trace'):
+                    auto_resize=True, style='braille', color='depth', rep='trace'):
     """Persistent curses wrapper for draw."""
     molecule_data = get_molecule_data(input_mol, three_d=three_d, add_hydrogens=add_hydrogens, representation=rep)
     canvas = MoleculeCanvas(width, height, float(width), float(height), aspect_ratio=2.0)
@@ -465,7 +465,7 @@ def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
 
 def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
                add_hydrogens=False, timeout=None, auto_resize=True,
-               style='ascii', color='depth', rep='trace'):
+               style='braille', color='depth', rep='trace'):
     """Render multiple molecules or proteins in sequence."""
     if names and len(names) != len(input_mols):
         raise ValueError("The number of names must match the number of inputs!")
