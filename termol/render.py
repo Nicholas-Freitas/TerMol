@@ -198,39 +198,45 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
     if has_curses_colors:
         try:
             curses.start_color()
-            curses.use_default_colors()
+            try:
+                curses.use_default_colors()
+                bg_color = -1
+            except Exception:
+                bg_color = curses.COLOR_BLACK
+
             num_colors = getattr(curses, 'COLORS', 8)
             num_pairs = getattr(curses, 'COLOR_PAIRS', 64)
-            use_256 = num_colors >= 256
+            # On Windows, PDCurses wincon uses a 4-bit foreground / 4-bit background console attribute.
+            # Passing color indices >= 16 overflows into the background attribute nibble,
+            # causing character backgrounds to turn gray/colored.
+            # True 256-color curses pairs are only supported on non-Windows ncurses platforms.
+            use_256 = (sys.platform != 'win32') and (num_colors >= 256) and (num_pairs >= 256)
+
+            # Always initialize the standard 16-color palette (pairs 1..14 with indices 0..7)
+            curses.init_pair(1, curses.COLOR_MAGENTA, bg_color)  # Helices
+            curses.init_pair(2, curses.COLOR_YELLOW, bg_color)   # Sheets
+            curses.init_pair(3, curses.COLOR_CYAN, bg_color)     # Loops
+            curses.init_pair(4, curses.COLOR_BLUE, bg_color)     # Rainbow blue
+            curses.init_pair(5, curses.COLOR_CYAN, bg_color)     # Rainbow cyan
+            curses.init_pair(6, curses.COLOR_GREEN, bg_color)    # Rainbow green
+            curses.init_pair(7, curses.COLOR_YELLOW, bg_color)   # Rainbow yellow
+            curses.init_pair(8, curses.COLOR_RED, bg_color)      # Rainbow red
+            curses.init_pair(9, curses.COLOR_WHITE, bg_color)    # Depth white
+            curses.init_pair(10, curses.COLOR_CYAN, bg_color)    # Depth cyan
+            curses.init_pair(11, curses.COLOR_BLUE, bg_color)    # Depth blue
+            curses.init_pair(12, curses.COLOR_YELLOW, bg_color)  # Ligand / Twilight yellow
+            curses.init_pair(13, curses.COLOR_MAGENTA, bg_color) # Twilight magenta
+            curses.init_pair(14, curses.COLOR_BLACK, bg_color)   # Monochrome charcoal / dark
 
             if use_256:
                 max_init = min(256, num_pairs)
                 for c in range(1, max_init):
                     try:
-                        curses.init_pair(c, c, -1)
+                        curses.init_pair(c, c, bg_color)
                         pair_map[c] = c
                     except Exception:
                         break
                 next_pair_idx = len(pair_map) + 1
-            else:
-                # 8/16-color fallback palette
-                # Secondary Structure pairs:
-                curses.init_pair(1, curses.COLOR_MAGENTA, -1)  # Helices
-                curses.init_pair(2, curses.COLOR_YELLOW, -1)   # Sheets
-                curses.init_pair(3, curses.COLOR_CYAN, -1)     # Loops
-                # Rainbow spectrum pairs:
-                curses.init_pair(4, curses.COLOR_BLUE, -1)
-                curses.init_pair(5, curses.COLOR_CYAN, -1)
-                curses.init_pair(6, curses.COLOR_GREEN, -1)
-                curses.init_pair(7, curses.COLOR_YELLOW, -1)
-                curses.init_pair(8, curses.COLOR_RED, -1)
-                # Depth pairs (Cyan Fog / Grayscale / Twilight tiers):
-                curses.init_pair(9, curses.COLOR_WHITE, -1)
-                curses.init_pair(10, curses.COLOR_CYAN, -1)
-                curses.init_pair(11, curses.COLOR_BLUE, -1)
-                curses.init_pair(12, curses.COLOR_YELLOW, -1)
-                curses.init_pair(13, curses.COLOR_MAGENTA, -1)
-                curses.init_pair(14, curses.COLOR_BLACK, -1)
         except Exception:
             has_curses_colors = False
             use_256 = False
@@ -241,7 +247,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
             return pair_map[color_idx]
         if next_pair_idx < num_pairs:
             try:
-                curses.init_pair(next_pair_idx, color_idx, -1)
+                curses.init_pair(next_pair_idx, color_idx, bg_color)
                 pair_map[color_idx] = next_pair_idx
                 pid = next_pair_idx
                 next_pair_idx += 1
@@ -352,7 +358,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
         if is_protein:
             display_name = name or molecule_data.name or "Protein"
             res_num = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
-            color_cap = "256c" if use_256 else f"{num_colors}c"
+            color_cap = "256c" if use_256 else ("16c" if sys.platform == 'win32' else f"{num_colors}c")
             header_text = f" {display_name} ({res_num} res) [Rep: {active_rep.upper()} (M) | Style: {active_style.upper()} (B) | Color: {active_color.upper()} (C) | {color_cap}] "
         elif name:
             header_text = f" {name} "
@@ -431,16 +437,14 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
                                 else:
                                     attr = curses.color_pair(11) | curses.A_DIM
                             elif active_color == 'depth2':
-                                if z_norm >= 0.80:
-                                    attr = curses.color_pair(9) | curses.A_BOLD
-                                elif z_norm >= 0.60:
-                                    attr = curses.color_pair(9)
-                                elif z_norm >= 0.40:
-                                    attr = curses.color_pair(9) | curses.A_DIM
-                                elif z_norm >= 0.20:
-                                    attr = curses.color_pair(14) | curses.A_BOLD
+                                if z_norm >= 0.75:
+                                    attr = curses.color_pair(9) | curses.A_BOLD   # Bold White
+                                elif z_norm >= 0.50:
+                                    attr = curses.color_pair(9)                  # Normal White
+                                elif z_norm >= 0.25:
+                                    attr = curses.color_pair(9) | curses.A_DIM   # Dim White
                                 else:
-                                    attr = curses.color_pair(14) | curses.A_DIM
+                                    attr = curses.color_pair(14) | curses.A_BOLD # Bold Black (Charcoal)
                             elif active_color == 'depth3':
                                 if z_norm >= 0.85:
                                     attr = curses.color_pair(12) | curses.A_BOLD
