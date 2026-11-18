@@ -494,5 +494,39 @@ def test_show_molecule_2d_truecolor(capsys):
     assert "\033[38;2;" in captured  # TrueColor ANSI sequence
 
 
+def test_termol_cli_smiles_invocation(monkeypatch, capsys):
+    """Verify termol command line entry point parses SMILES without error."""
+    import sys
+    from termol.cli import termol_cli
+
+    monkeypatch.setattr(sys, 'argv', ['termol', 'CC(=O)Oc1ccccc1C(=O)O', '--show2D', '--names', 'Aspirin'])
+    termol_cli()
+
+    captured = capsys.readouterr().out
+    assert "Aspirin" in captured
+    assert "\033[38;2;" in captured
+
+
+def test_termol_cli_sdf_invocation(tmp_path, monkeypatch, capsys):
+    """Verify termol command line entry point parses .sdf file without error."""
+    import sys
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+    from termol.cli import termol_cli
+
+    mol = Chem.MolFromSmiles('c1ccccc1')
+    AllChem.EmbedMolecule(mol)
+    sdf_file = str(tmp_path / "benzene.sdf")
+    writer = Chem.SDWriter(sdf_file)
+    writer.write(mol)
+    writer.close()
+
+    monkeypatch.setattr(sys, 'argv', ['termol', sdf_file, '--show2D'])
+    termol_cli()
+
+    captured = capsys.readouterr().out
+    assert "benzene" in captured
+
+
 
 

@@ -1,6 +1,7 @@
 import argparse
-from .render import draw_multi, showcase
 import csv
+from pathlib import Path
+from .render import draw_multi, showcase
 
 def termol_cli():
     parser = argparse.ArgumentParser(
