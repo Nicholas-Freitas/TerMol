@@ -153,12 +153,20 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
             curses.init_pair(6, curses.COLOR_GREEN, -1)
             curses.init_pair(7, curses.COLOR_YELLOW, -1)
             curses.init_pair(8, curses.COLOR_RED, -1)
-            # Depth cueing pairs:
+            # Depth cueing pairs (depth / depth1 - Cyan Fog):
             curses.init_pair(9, curses.COLOR_WHITE, -1)    # Foreground (bright)
             curses.init_pair(10, curses.COLOR_CYAN, -1)    # Mid-ground
             curses.init_pair(11, curses.COLOR_BLUE, -1)    # Background (dim)
             # Ligand pair:
             curses.init_pair(12, curses.COLOR_YELLOW, -1)
+            # Depth2 (Monochrome / Grayscale) pairs:
+            curses.init_pair(13, curses.COLOR_WHITE, -1)   # Foreground (bold)
+            curses.init_pair(14, curses.COLOR_WHITE, -1)   # Mid-ground (normal)
+            curses.init_pair(15, curses.COLOR_BLACK, -1)   # Background (dim)
+            # Depth3 (Twilight / Plasma) pairs:
+            curses.init_pair(16, curses.COLOR_YELLOW, -1)  # Foreground (warm peach / yellow)
+            curses.init_pair(17, curses.COLOR_MAGENTA, -1) # Mid-ground (magenta)
+            curses.init_pair(18, curses.COLOR_BLUE, -1)    # Background (midnight violet / blue)
         except Exception:
             has_curses_colors = False
 
@@ -171,11 +179,13 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
     if is_protein:
         active_style = style
         active_color = color
+        if active_color == 'depth':
+            active_color = 'depth1'
         active_rep = rep or getattr(molecule_data, 'representation', 'trace')
         if active_rep not in ('trace', 'cartoon', 'tube'):
             active_rep = 'cartoon' if active_rep == 'ribbon' else 'trace'
 
-        color_modes = ['depth', 'rainbow', 'ss', 'none']
+        color_modes = ['depth1', 'depth2', 'depth3', 'rainbow', 'ss', 'none']
         styles = ['ascii', 'braille']
         rep_modes = ['trace', 'cartoon', 'tube']
 
@@ -307,13 +317,27 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
                     attr = curses.A_NORMAL
                     if has_curses_colors and active_color != 'none':
                         z = protein_canvas.z_buffer[cy, cx]
-                        if active_color == 'depth':
+                        if active_color in ('depth', 'depth1'):
                             if z > 0:
                                 attr = curses.color_pair(9) | curses.A_BOLD
                             elif z > -15:
                                 attr = curses.color_pair(10)
                             else:
                                 attr = curses.color_pair(11) | curses.A_DIM
+                        elif active_color == 'depth2':
+                            if z > 0:
+                                attr = curses.color_pair(13) | curses.A_BOLD
+                            elif z > -15:
+                                attr = curses.color_pair(14)
+                            else:
+                                attr = curses.color_pair(15) | curses.A_BOLD
+                        elif active_color == 'depth3':
+                            if z > 0:
+                                attr = curses.color_pair(16) | curses.A_BOLD
+                            elif z > -15:
+                                attr = curses.color_pair(17) | curses.A_BOLD
+                            else:
+                                attr = curses.color_pair(18) | curses.A_DIM
                         elif active_color == 'rainbow':
                             color_rgb = protein_canvas.color_data[cy][cx]
                             if color_rgb:

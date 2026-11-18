@@ -324,14 +324,51 @@ class ProteinCanvas(Canvas):
             b = int(base_rgb[2] * val_depth)
             return r, g, b
 
+        elif self.color_mode == 'depth2':
+            # Option 2: High-contrast monochrome / pure grayscale (charcoal -> silver -> bright white)
+            t = z_norm ** 1.3
+            val = int(28 + 227 * t)
+            return val, val, val
+
+        elif self.color_mode == 'depth3':
+            # Option 3: Twilight / neon plasma (midnight violet -> vibrant magenta -> golden peach/white)
+            k0 = (20, 10, 45)       # dark violet
+            k1 = (185, 45, 145)     # vibrant magenta
+            k2 = (255, 238, 200)    # warm golden white
+            if z_norm < 0.55:
+                t = (z_norm / 0.55) ** 1.2
+                return (
+                    int(k0[0] + (k1[0] - k0[0]) * t),
+                    int(k0[1] + (k1[1] - k0[1]) * t),
+                    int(k0[2] + (k1[2] - k0[2]) * t)
+                )
+            else:
+                t = ((z_norm - 0.55) / 0.45) ** 0.9
+                return (
+                    int(k1[0] + (k2[0] - k1[0]) * t),
+                    int(k1[1] + (k2[1] - k1[1]) * t),
+                    int(k1[2] + (k2[2] - k1[2]) * t)
+                )
+
         else:
-            # Default 'depth' mode: Ice-blue to bright white luminance ramp
-            # Farthest: dark slate blue (30, 60, 110)
-            # Nearest: bright glowing cyan-white (220, 245, 255)
-            r = int(30 + 190 * val_depth)
-            g = int(60 + 185 * val_depth)
-            b = int(110 + 145 * val_depth)
-            return r, g, b
+            # Default 'depth' / 'depth1': Deep cyan / oceanic ice fog (midnight navy -> electric cyan -> cyan-white)
+            k0 = (15, 30, 60)       # deep midnight navy
+            k1 = (35, 185, 230)     # vibrant electric cyan
+            k2 = (235, 252, 255)    # glowing cyan-white
+            if z_norm < 0.60:
+                t = (z_norm / 0.60) ** 1.3
+                return (
+                    int(k0[0] + (k1[0] - k0[0]) * t),
+                    int(k0[1] + (k1[1] - k0[1]) * t),
+                    int(k0[2] + (k1[2] - k0[2]) * t)
+                )
+            else:
+                t = ((z_norm - 0.60) / 0.40) ** 0.85
+                return (
+                    int(k1[0] + (k2[0] - k1[0]) * t),
+                    int(k1[1] + (k2[1] - k1[1]) * t),
+                    int(k1[2] + (k2[2] - k1[2]) * t)
+                )
 
     def _draw_line_ascii(self, x1: float, y1: float, z1: float,
                           x2: float, y2: float, z2: float,

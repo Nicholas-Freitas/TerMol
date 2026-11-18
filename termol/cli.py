@@ -22,8 +22,9 @@ def termol_cli():
         help='Rendering style for proteins: "braille" (high-resolution subpixel dots, default) or "ascii" (density ramp).'
     )
     parser.add_argument(
-        '--color', choices=['depth', 'rainbow', 'ss', 'none'], default='depth',
-        help='Color mode for proteins: "depth" (default luminance ramp), "rainbow" (N->C spectrum), "ss" (secondary structure), or "none".'
+        '--color', choices=['depth', 'depth1', 'depth2', 'depth3', 'rainbow', 'ss', 'none'], default='depth',
+        help='Color mode for proteins: "depth"/"depth1" (deep cyan fog, default), "depth2" (monochrome/grayscale), '
+             '"depth3" (twilight/plasma), "rainbow" (N->C spectrum), "ss" (secondary structure), or "none".'
     )
     parser.add_argument(
         '--rep', '--representation', dest='rep', choices=['trace', 'cartoon', 'ribbon', 'tube'], default='trace',

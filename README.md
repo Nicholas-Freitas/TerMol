@@ -41,7 +41,7 @@ Additional arguments include:
 - `--show2D`: Display in 2D instead of 3D.
 - `--rep, --representation`: For proteins: `trace` (1D Catmull-Rom spline, default), `cartoon` or `ribbon` (secondary structure flat ribbons and arrowheads), or `tube` (uniform 3D thickness).
 - `--style`: For proteins: `braille` (high-resolution subpixel curves, default) or `ascii` (depth ramp).
-- `--color`: For proteins: `depth` (default luminance depth cueing), `rainbow` (N-to-C spectrum), `ss` (secondary structure: helices/sheets/loops), or `none`.
+- `--color`: For proteins: `depth` / `depth1` (oceanic cyan fog, default), `depth2` (monochrome/grayscale), `depth3` (twilight/plasma), `rainbow` (N-to-C spectrum), `ss` (secondary structure), or `none`.
 - `--add_hydrogens`: Have RDKit attempt to add hydrogens automatically. Default False.
 - `--timeout`: In the 3D viewer, this will automatically close after this number of seconds. Default None, which allows the viewer to stay open indefinitely.
 
@@ -69,7 +69,7 @@ In the 3D viewer, the molecule or protein will initially rotate about the Y-axis
 - **Zoom**: `F` (zoom in / closer), `R` (zoom out / further away).
 - **Cycle Representation**: Press `M` to cycle between **Trace** (`trace`), **Cartoon** (`cartoon`), and **Tube** (`tube`).
 - **Toggle Protein Style**: Press `B` to toggle between **ASCII** density ramp and **Braille** subpixel curves.
-- **Cycle Protein Color**: Press `C` to cycle between **Depth** shading, **Rainbow** spectrum, **Secondary Structure** (`ss`), and plain text (`none`).
+- **Cycle Protein Color**: Press `C` to cycle between **Depth 1** (Ocean Cyan), **Depth 2** (Monochrome), **Depth 3** (Twilight), **Rainbow** spectrum, **Secondary Structure** (`ss`), and plain text (`none`).
 - **Exit**: Hit any other key.
 
 

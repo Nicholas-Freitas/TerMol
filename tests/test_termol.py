@@ -127,7 +127,7 @@ def test_color_modes():
     structure = parse_pdb_text(SAMPLE_PDB)
     segments = generate_backbone_points(structure, samples_per_res=4)
 
-    for cm in ['depth', 'rainbow', 'ss']:
+    for cm in ['depth', 'depth1', 'depth2', 'depth3', 'rainbow', 'ss']:
         canvas = ProteinCanvas(60, 30, 60, 30, aspect_ratio=2.0, style='ascii', color_mode=cm)
         canvas.draw_protein(segments)
         ansi_text = canvas.render_ansi()
