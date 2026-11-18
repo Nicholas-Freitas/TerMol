@@ -65,9 +65,9 @@ def scale_protein_for_canvas(backbone_segments: List[List[BackbonePoint]], ligan
     return float(scale)
 
 
-def show_molecule_2D(molecule_data, canvas, name=None, style='braille', color='depth', rep='trace'):
+def show_molecule_2D(molecule_data, canvas, name=None, style=None, color=None, rep='trace'):
     """Render a static 2D snapshot of a small molecule or protein."""
-    # Ensure stdout handles UTF-8 safely (e.g. for Braille)
+    # Ensure stdout handles UTF-8 safely (e.g. for Braille/Unicode glyphs)
     if hasattr(sys.stdout, 'reconfigure'):
         try:
             sys.stdout.reconfigure(encoding='utf-8')
@@ -76,11 +76,13 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='braille', color='d
 
     # Check if input is a protein
     if isinstance(molecule_data, MoleculeData) and molecule_data.is_protein:
+        active_style = style or 'braille'
+        active_color = color or 'depth'
         protein_canvas = ProteinCanvas(
             canvas.char_width, canvas.char_height,
             canvas.width, canvas.height,
             aspect_ratio=canvas.aspect_ratio,
-            style=style, color_mode=color
+            style=active_style, color_mode=active_color
         )
 
         active_rep = rep or getattr(molecule_data, 'representation', 'trace')
@@ -103,18 +105,21 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='braille', color='d
         if name or molecule_data.name:
             display_name = name or molecule_data.name
             res_count = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
-            header = f" {display_name} ({res_count} res) [{active_rep.upper()} | {style.upper()} | {color.upper()}] "
+            header = f" {display_name} ({res_count} res) [{active_rep.upper()} | {active_style.upper()} | {active_color.upper()}] "
             if len(header) > protein_canvas.char_width - 6:
                 header = header[:protein_canvas.char_width - 10] + "... "
             print(header.center(protein_canvas.char_width, "="))
 
-        if color == 'none':
+        if active_color == 'none':
             print(protein_canvas.render_plain())
         else:
             print(protein_canvas.render_ansi())
         return
 
     # Small molecule 2D rendering
+    active_style = style or 'symbols'
+    active_color = color or 'cpk'
+
     atom_positions, atom_elements, atom_charges, bonds = molecule_data
     atom_positions = atom_positions.copy()
     atom_positions = scale_for_canvas(atom_positions, canvas)
@@ -124,16 +129,20 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='braille', color='d
     bond_orders = getattr(molecule_data, 'bond_orders', None)
 
     canvas.clear()
-    canvas.draw_molecules(atom_positions_2D, atom_elements, atom_charges, bonds, bond_orders=bond_orders)
+    canvas.draw_molecules(atom_positions_2D, atom_elements, atom_charges, bonds,
+                          bond_orders=bond_orders, style=active_style, color_mode=active_color)
 
     display_name = name or getattr(molecule_data, 'name', None)
     if display_name:
-        header = f" {display_name} "
+        header = f" {display_name} [{active_style.upper()}] "
         if len(header) > canvas.char_width - 10:
             header = header[:canvas.char_width - 10] + "... "
-        print(f"\033[1;36m{header.center(canvas.char_width, '=')}\033[0m")
+        if active_color == 'none':
+            print(header.center(canvas.char_width, "="))
+        else:
+            print(f"\033[1;36m{header.center(canvas.char_width, '=')}\033[0m")
 
-    if color == 'none':
+    if active_color == 'none':
         print(canvas.render_plain())
     else:
         print(canvas.render_ansi())
@@ -332,6 +341,8 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
 
         segments = get_segments(active_rep)
     else:
+        active_style = style or 'symbols'
+        active_color = color or 'cpk'
         atom_positions, atom_elements, atom_charges, bonds = molecule_data
         atom_positions = atom_positions.copy()
         atom_positions = scale_for_canvas(atom_positions, canvas)
@@ -720,9 +731,9 @@ def read_available_input() -> str:
 
 
 def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
-                          auto_resize=True, style='braille', color='depth', rep='trace'):
+                          auto_resize=True, style=None, color=None, rep='trace'):
     """
-    Interactive 3D TrueColor ANSI renderer with mouse click-drag rotation and scroll zoom.
+    Interactive 3D TrueColor ANSI renderer with responsive keyboard navigation.
     Directly streams 24-bit RGB ANSI escape sequences, completely bypassing curses.
     """
     is_protein = isinstance(molecule_data, MoleculeData) and molecule_data.is_protein
@@ -737,8 +748,8 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
         canvas.resize_canvas(term_width, max(10, term_height - 3))
 
     if is_protein:
-        active_style = style
-        active_color = color
+        active_style = style or 'braille'
+        active_color = color or 'depth'
         if active_color == 'depth':
             active_color = 'depth1'
         active_rep = rep or getattr(molecule_data, 'representation', 'trace')
@@ -831,6 +842,8 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
 
         segments = get_segments(active_rep)
     else:
+        active_style = style or 'symbols'
+        active_color = color or 'cpk'
         atom_positions, atom_elements, atom_charges, bonds = molecule_data
         atom_positions = atom_positions.copy()
         atom_positions = scale_for_canvas(atom_positions, canvas)
@@ -936,14 +949,20 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                     bond_orders = getattr(molecule_data, 'bond_orders', None)
 
                     canvas.clear()
-                    canvas.draw_molecules(positions_3D, atom_elements, atom_charges, bonds, bond_orders=bond_orders)
+                    canvas.draw_molecules(positions_3D, atom_elements, atom_charges, bonds,
+                                          bond_orders=bond_orders, style=active_style, color_mode=active_color)
 
                     display_name = name or getattr(molecule_data, 'name', None) or "Molecule"
-                    header_text = f" {display_name} [Small Mol | Arrows/WASD: steer | Space: pause | +/-: zoom | Q: quit] "
+                    header_text = f" {display_name} [Small Mol | {active_style.upper()} (B) | {active_color.upper()} (C) | Arrows/WASD: steer | Space: pause | +/-: zoom | Q: quit] "
+                    if len(header_text) > canvas.char_width - 6:
+                        header_text = f" {display_name} [{active_style.upper()} | {active_color.upper()} | Arrows: steer] "
                     if len(header_text) > canvas.char_width - 6:
                         header_text = header_text[:canvas.char_width - 10] + "... "
                     header_line = header_text.center(canvas.char_width, "=")
-                    body = canvas.render_ansi()
+                    if active_color == 'none':
+                        body = canvas.render_plain()
+                    else:
+                        body = canvas.render_ansi()
 
                     fps_line = f"\033[1;32m{fps_str}\033[0m"
                     frame = f"\033[H\033[1;36m{header_line}\033[0m\n{fps_line}\n{body}"
@@ -1052,12 +1071,22 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                             idx = rep_modes.index(active_rep) if active_rep in rep_modes else 0
                             active_rep = rep_modes[(idx + 1) % len(rep_modes)]
                             segments = get_segments(active_rep)
-                        elif ch in ('c', 'C') and is_protein:
-                            idx = color_modes.index(active_color)
-                            active_color = color_modes[(idx + 1) % len(color_modes)]
-                        elif ch in ('b', 'B') and is_protein:
-                            idx = styles.index(active_style)
-                            active_style = styles[(idx + 1) % len(styles)]
+                        elif ch in ('c', 'C'):
+                            if is_protein:
+                                idx = color_modes.index(active_color) if active_color in color_modes else 0
+                                active_color = color_modes[(idx + 1) % len(color_modes)]
+                            else:
+                                small_mol_color_modes = ['cpk', 'none']
+                                idx = small_mol_color_modes.index(active_color) if active_color in small_mol_color_modes else 0
+                                active_color = small_mol_color_modes[(idx + 1) % len(small_mol_color_modes)]
+                        elif ch in ('b', 'B'):
+                            if is_protein:
+                                idx = styles.index(active_style) if active_style in styles else 0
+                                active_style = styles[(idx + 1) % len(styles)]
+                            else:
+                                small_mol_styles = ['symbols', 'balls', 'dots']
+                                idx = small_mol_styles.index(active_style) if active_style in small_mol_styles else 0
+                                active_style = small_mol_styles[(idx + 1) % len(small_mol_styles)]
 
                 if timeout and time.time() > end_time and not rotation_paused:
                     break
@@ -1068,7 +1097,7 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
 
 def draw(input_mol, name=None, width=80, height=40, three_d=True,
          add_hydrogens=False, timeout=None, stdscr=None, auto_resize=True,
-         style='braille', color='depth', rep='trace', backend='ansi'):
+         style=None, color=None, rep='trace', backend='ansi'):
     """
     Main function for TerMol. Renders small molecules or protein structures in 2D or 3D.
     Inputs:
@@ -1077,10 +1106,10 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
         width: Canvas width in characters (default 80).
         height: Canvas height in characters (default 40).
         three_d: Whether to display interactive 3D viewer (default True).
-        style: For proteins: 'braille' (subpixel dots, default) or 'ascii' (density ramp).
-        color: For proteins: 'depth' (default luminance ramp), 'rainbow' (N->C), 'ss' (secondary structure), or 'none'.
+        style: For proteins: 'braille' (default) or 'ascii'; for small molecules: 'symbols' (default), 'balls', or 'dots'.
+        color: For proteins: 'depth' (default), 'rainbow', 'ss', or 'none'; for small molecules: 'cpk' (default) or 'none'.
         rep: For proteins: 'trace' (default 1D line), 'cartoon'/'ribbon' (flat ribbons and arrows), or 'tube'.
-        backend: Interactive 3D backend: 'ansi' (default, 24-bit TrueColor with mouse drag/scroll) or 'curses' (legacy curses).
+        backend: Interactive 3D backend: 'ansi' (default, 24-bit TrueColor) or 'curses' (legacy curses).
     """
     if three_d:
         if backend == 'curses':
@@ -1099,7 +1128,7 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
 
 def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
                     three_d=True, add_hydrogens=False, timeout=None,
-                    auto_resize=True, style='braille', color='depth', rep='trace',
+                    auto_resize=True, style=None, color=None, rep='trace',
                     backend='ansi'):
     """Persistent wrapper for draw supporting both ANSI and curses backends."""
     molecule_data = get_molecule_data(input_mol, three_d=three_d, add_hydrogens=add_hydrogens, representation=rep)
@@ -1122,7 +1151,7 @@ def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
 
 def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
                add_hydrogens=False, timeout=None, auto_resize=True,
-               style='braille', color='depth', rep='trace', backend='ansi'):
+               style=None, color=None, rep='trace', backend='ansi'):
     """Render multiple molecules or proteins in sequence."""
     if names and len(names) != len(input_mols):
         raise ValueError("The number of names must match the number of inputs!")

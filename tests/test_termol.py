@@ -528,5 +528,67 @@ def test_termol_cli_sdf_invocation(tmp_path, monkeypatch, capsys):
     assert "benzene" in captured
 
 
+def test_bond_orders_and_aromaticity_rendering():
+    """Verify single, double, triple, and aromatic bond characters."""
+    from termol.canvas import MoleculeCanvas
+
+    canvas = MoleculeCanvas(40, 20, 40.0, 20.0, aspect_ratio=2.0)
+    # Triple bond (order=3.0) horizontally between (0, 0) and (10, 0)
+    # Double bond (order=2.0) vertically between (0, 2) and (0, 8)
+    # Aromatic bond (order=1.5) horizontally between (15, 0) and (25, 0)
+    positions = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (0.0, 2.0, 0.0), (0.0, 8.0, 0.0), (15.0, 0.0, 0.0), (25.0, 0.0, 0.0)]
+    elements = ['C', 'C', 'C', 'C', 'C', 'C']
+    charges = [0, 0, 0, 0, 0, 0]
+    bonds = [(0, 1), (2, 3), (4, 5)]
+    bond_orders = [3.0, 2.0, 1.5]
+
+    canvas.draw_molecules(positions, elements, charges, bonds, bond_orders=bond_orders)
+    plain = canvas.render_plain()
+
+    # Triple bond glyph '≡' should be present
+    assert '≡' in plain
+    # Double vertical bond glyph '‖' should be present
+    assert '‖' in plain
+    # Aromatic horizontal bond glyph '╌' should be present
+    assert '╌' in plain
+
+
+def test_small_molecule_styles_balls_and_dots():
+    """Verify balls and dots visual styles for small molecules."""
+    from termol.canvas import MoleculeCanvas
+
+    canvas_balls = MoleculeCanvas(40, 20, 40.0, 20.0, aspect_ratio=2.0, style='balls')
+    canvas_dots = MoleculeCanvas(40, 20, 40.0, 20.0, aspect_ratio=2.0, style='dots')
+
+    positions = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0)]
+    elements = ['C', 'S']
+    charges = [0, 0]
+    bonds = [(0, 1)]
+
+    canvas_balls.draw_molecules(positions, elements, charges, bonds, style='balls')
+    plain_balls = canvas_balls.render_plain()
+    # Carbon should be '●', Sulfur (larger atom) should be '◉'
+    assert '●' in plain_balls
+    assert '◉' in plain_balls
+
+    canvas_dots.draw_molecules(positions, elements, charges, bonds, style='dots')
+    plain_dots = canvas_dots.render_plain()
+    assert '•' in plain_dots
+
+
+def test_termol_cli_no_color_flag(monkeypatch, capsys):
+    """Verify --no-color flag strips all ANSI sequences from output."""
+    import sys
+    from termol.cli import termol_cli
+
+    monkeypatch.setattr(sys, 'argv', ['termol', 'c1ccccc1', '--show2D', '--no-color'])
+    termol_cli()
+
+    captured = capsys.readouterr().out
+    assert "\033[38;2;" not in captured
+    assert "\033[" not in captured
+    assert "C" in captured
+
+
 
 

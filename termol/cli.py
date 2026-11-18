@@ -19,13 +19,18 @@ def termol_cli():
     parser.add_argument('--add_hydrogens', action='store_true', help='Add hydrogens to small molecules via RDKit (default False).')
     parser.add_argument('--timeout', type=int, default=None, help='3D window will close after this number of seconds (default indefinitely).')
     parser.add_argument(
-        '--style', choices=['ascii', 'braille'], default='braille',
-        help='Rendering style for proteins: "braille" (high-resolution subpixel dots, default) or "ascii" (density ramp).'
+        '--style', default=None,
+        help='Rendering style: for small molecules: "symbols" (chemical symbols, default), "balls" (spherical ball-and-stick glyphs), or "dots"; '
+             'for proteins: "braille" (subpixel dots, default) or "ascii".'
     )
     parser.add_argument(
-        '--color', choices=['depth', 'depth1', 'depth2', 'depth3', 'rainbow', 'ss', 'none'], default='depth',
-        help='Color mode for proteins: "depth"/"depth1" (deep cyan fog, default), "depth2" (monochrome/grayscale), '
-             '"depth3" (twilight/plasma), "rainbow" (N->C spectrum), "ss" (secondary structure), or "none".'
+        '--color', default=None,
+        help='Color mode: for small molecules: "cpk" (default) or "none"; '
+             'for proteins: "depth"/"depth1" (default), "depth2", "depth3", "rainbow", "ss", or "none".'
+    )
+    parser.add_argument(
+        '--no-color', action='store_true',
+        help='Disable ANSI TrueColor escape sequences and render in monochrome text.'
     )
     parser.add_argument(
         '--rep', '--representation', dest='rep', choices=['trace', 'cartoon', 'ribbon', 'tube'], default='trace',
@@ -36,6 +41,9 @@ def termol_cli():
         help='Interactive 3D rendering backend: "ansi" (24-bit TrueColor with responsive keyboard navigation, default) or "curses" (legacy curses).'
     )
     args = parser.parse_args()
+
+    if args.no_color:
+        args.color = 'none'
 
     width_default = 80
     height_default = 40
