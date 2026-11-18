@@ -174,13 +174,64 @@ DEFAULT_ATOM_COLOR = (200, 200, 200)
 
 class MoleculeCanvas(Canvas):
     def __init__(self, char_width: int, char_height: int, width: float, height: float,
-                 aspect_ratio: float = 2.0, style: str = 'symbols', color_mode: str = 'cpk'):
+                 aspect_ratio: float = 2.0, style: str = 'symbols', color_mode: str = 'cpk',
+                 bond_spacing: float = 3.0):
         super().__init__(char_width, char_height, width, height, aspect_ratio)
         self.style = style.lower() if style else 'symbols'
         self.color_mode = color_mode.lower() if color_mode else 'cpk'
+        self.bond_spacing = float(bond_spacing)
+
+        # Braille subpixel grid (2 horizontal dots x 4 vertical dots per character cell)
+        self.sub_width = self.char_width * 2
+        self.sub_height = self.char_height * 4
+        self.braille_bits = np.zeros((self.char_height, self.char_width), dtype=int)
+        self.sub_z_buffer = np.full((self.sub_height, self.sub_width), -np.inf, dtype=float)
+
+    def clear(self):
+        super().clear()
+        self.sub_width = self.char_width * 2
+        self.sub_height = self.char_height * 4
+        self.braille_bits = np.zeros((self.char_height, self.char_width), dtype=int)
+        self.sub_z_buffer = np.full((self.sub_height, self.sub_width), -np.inf, dtype=float)
+
+    def resize_canvas(self, char_width: int, char_height: int):
+        super().resize_canvas(char_width, char_height)
+        self.sub_width = self.char_width * 2
+        self.sub_height = self.char_height * 4
+        self.braille_bits = np.zeros((self.char_height, self.char_width), dtype=int)
+        self.sub_z_buffer = np.full((self.sub_height, self.sub_width), -np.inf, dtype=float)
+
+    def map_subpixel_coords(self, x: float, y: float) -> Tuple[float, float]:
+        span_x = self.max_x - self.min_x
+        span_y = self.max_y - self.min_y
+        sx = ((x - self.min_x) / span_x) * (self.sub_width - 1)
+        sy = ((y - self.min_y) / span_y) * (self.sub_height - 1)
+        return sx, sy
+
+    def plot_subpixel(self, sx: float, sy: float, z: float, color: Optional[Tuple[int, int, int]] = None):
+        ix = int(round(sx))
+        iy = int(round(sy))
+        if 0 <= ix < self.sub_width and 0 <= iy < self.sub_height:
+            if z >= self.sub_z_buffer[iy, ix]:
+                self.sub_z_buffer[iy, ix] = z
+                cx = ix >> 1
+                cy = iy >> 2
+                dx_bit = ix & 1
+                dy_bit = iy & 3
+                self.braille_bits[cy, cx] |= BRAILLE_DOT_MAP.get((dx_bit, dy_bit), 0)
+                if color is not None and z >= self.z_buffer[cy, cx]:
+                    self.z_buffer[cy, cx] = z
+                    self.color_data[cy][cx] = color
+
+    def _finalize_braille_grid(self):
+        for cy in range(self.char_height):
+            for cx in range(self.char_width):
+                b = self.braille_bits[cy, cx]
+                if b > 0 and self.data[cy][cx] == ' ':
+                    self.data[cy][cx] = chr(0x2800 + b)
 
     def draw_molecules(self, atom_positions, atom_elements, atom_charges, bonds,
-                       bond_orders=None, style=None, color_mode=None):
+                       bond_orders=None, style=None, color_mode=None, bond_spacing=None):
         active_style = (style or self.style).lower()
         active_color = (color_mode or self.color_mode).lower()
 
@@ -201,12 +252,195 @@ class MoleculeCanvas(Canvas):
                 return 0.40 + 0.60 * t
             return 1.0
 
-        self.draw_bonds(atom_positions, bonds, atom_elements=atom_elements,
-                        bond_orders=bond_orders, style=active_style, color_mode=active_color,
-                        get_depth_scale=get_depth_scale)
-        self.draw_atoms(atom_positions, atom_elements, atom_charges,
-                        style=active_style, color_mode=active_color,
-                        get_depth_scale=get_depth_scale)
+        if active_style in ('braille', 'subpixel'):
+            self._draw_bonds_braille(atom_positions, bonds, atom_elements=atom_elements,
+                                     bond_orders=bond_orders, color_mode=active_color,
+                                     get_depth_scale=get_depth_scale,
+                                     bond_spacing=bond_spacing or self.bond_spacing)
+            self._finalize_braille_grid()
+            self._draw_atoms_braille(atom_positions, atom_elements, atom_charges, bonds,
+                                     color_mode=active_color, get_depth_scale=get_depth_scale)
+        else:
+            self.draw_bonds(atom_positions, bonds, atom_elements=atom_elements,
+                            bond_orders=bond_orders, style=active_style, color_mode=active_color,
+                            get_depth_scale=get_depth_scale)
+            self.draw_atoms(atom_positions, atom_elements, atom_charges,
+                            style=active_style, color_mode=active_color,
+                            get_depth_scale=get_depth_scale)
+
+    def _draw_bonds_braille(self, atom_positions, bonds, atom_elements=None,
+                            bond_orders=None, color_mode='cpk', get_depth_scale=None,
+                            bond_spacing=None):
+        if get_depth_scale is None:
+            get_depth_scale = lambda z: 1.0
+
+        spacing = bond_spacing if bond_spacing is not None else self.bond_spacing
+
+        def draw_sub_line(x1, y1, z1, x2, y2, z2, color1, color2, dotted=False, dot_stride=2):
+            dx = x2 - x1
+            dy = y2 - y1
+            steps = int(max(abs(dx), abs(dy)))
+            if steps == 0:
+                self.plot_subpixel(x1, y1, z1, color1)
+                return
+
+            inv_steps = 1.0 / steps
+            x_inc = dx * inv_steps
+            y_inc = dy * inv_steps
+            z_inc = (z2 - z1) * inv_steps
+
+            curr_x = float(x1)
+            curr_y = float(y1)
+            curr_z = float(z1)
+
+            for step in range(steps + 1):
+                if dotted and (step % dot_stride != 0):
+                    curr_x += x_inc
+                    curr_y += y_inc
+                    curr_z += z_inc
+                    continue
+
+                alpha = step * inv_steps
+                base_col = color1 if alpha < 0.5 else color2
+                if color_mode == 'none' or base_col is None:
+                    pixel_col = None
+                else:
+                    scale = get_depth_scale(curr_z)
+                    pixel_col = (
+                        int(base_col[0] * scale * 0.85),
+                        int(base_col[1] * scale * 0.85),
+                        int(base_col[2] * scale * 0.85),
+                    )
+
+                self.plot_subpixel(curr_x, curr_y, curr_z - 0.05, pixel_col)
+                curr_x += x_inc
+                curr_y += y_inc
+                curr_z += z_inc
+
+        for b_idx, bond in enumerate(bonds):
+            begin_idx = bond[0]
+            end_idx = bond[1]
+            order = bond[2] if len(bond) > 2 else (bond_orders[b_idx] if bond_orders and b_idx < len(bond_orders) else 1.0)
+
+            p1 = atom_positions[begin_idx]
+            p2 = atom_positions[end_idx]
+            sx1, sy1 = self.map_subpixel_coords(p1[0], p1[1])
+            sx2, sy2 = self.map_subpixel_coords(p2[0], p2[1])
+            z1 = p1[2] if len(p1) > 2 else 0.0
+            z2 = p2[2] if len(p2) > 2 else 0.0
+
+            elem1 = atom_elements[begin_idx] if atom_elements and begin_idx < len(atom_elements) else 'C'
+            elem2 = atom_elements[end_idx] if atom_elements and end_idx < len(atom_elements) else 'C'
+
+            color1 = CPK_COLORS.get(elem1, DEFAULT_ATOM_COLOR) if color_mode != 'none' else None
+            color2 = CPK_COLORS.get(elem2, DEFAULT_ATOM_COLOR) if color_mode != 'none' else None
+
+            dx = sx2 - sx1
+            dy = sy2 - sy1
+            dist = math.hypot(dx, dy)
+            if dist < 1e-4:
+                continue
+
+            # In Option A: leave a small margin around heteroatoms so lines meet cleanly at letter boundary
+            trim_margin = 2.0  # subpixels
+            t1 = (trim_margin / dist) if (elem1 != 'C') else 0.0
+            t2 = (trim_margin / dist) if (elem2 != 'C') else 0.0
+            if t1 + t2 < 0.85:
+                rx1 = sx1 + dx * t1
+                ry1 = sy1 + dy * t1
+                rz1 = z1 + (z2 - z1) * t1
+                rx2 = sx2 - dx * t2
+                ry2 = sy2 - dy * t2
+                rz2 = z2 - (z2 - z1) * t2
+            else:
+                rx1, ry1, rz1 = sx1, sy1, z1
+                rx2, ry2, rz2 = sx2, sy2, z2
+
+            nx = -dy / dist
+            ny = dx / dist
+
+            is_aromatic = (abs(order - 1.5) < 1e-3)
+            is_triple = (order >= 2.8)
+            is_double = (not is_aromatic and order >= 1.8 and order < 2.8)
+
+            if is_triple:
+                draw_sub_line(rx1, ry1, rz1, rx2, ry2, rz2, color1, color2)
+                draw_sub_line(rx1 - nx * spacing, ry1 - ny * spacing, rz1,
+                              rx2 - nx * spacing, ry2 - ny * spacing, rz2, color1, color2)
+                draw_sub_line(rx1 + nx * spacing, ry1 + ny * spacing, rz1,
+                              rx2 + nx * spacing, ry2 + ny * spacing, rz2, color1, color2)
+            elif is_double:
+                draw_sub_line(rx1 - nx * (spacing * 0.5), ry1 - ny * (spacing * 0.5), rz1,
+                              rx2 - nx * (spacing * 0.5), ry2 - ny * (spacing * 0.5), rz2, color1, color2)
+                draw_sub_line(rx1 + nx * (spacing * 0.5), ry1 + ny * (spacing * 0.5), rz1,
+                              rx2 + nx * (spacing * 0.5), ry2 + ny * (spacing * 0.5), rz2, color1, color2)
+            elif is_aromatic:
+                draw_sub_line(rx1 - nx * (spacing * 0.5), ry1 - ny * (spacing * 0.5), rz1,
+                              rx2 - nx * (spacing * 0.5), ry2 - ny * (spacing * 0.5), rz2, color1, color2)
+                draw_sub_line(rx1 + nx * (spacing * 0.5), ry1 + ny * (spacing * 0.5), rz1,
+                              rx2 + nx * (spacing * 0.5), ry2 + ny * (spacing * 0.5), rz2, color1, color2,
+                              dotted=True, dot_stride=2)
+            else:
+                draw_sub_line(rx1, ry1, rz1, rx2, ry2, rz2, color1, color2)
+
+    def _draw_atoms_braille(self, atom_positions, atom_elements, atom_charges, bonds,
+                            color_mode='cpk', get_depth_scale=None):
+        if get_depth_scale is None:
+            get_depth_scale = lambda z: 1.0
+
+        # Count bonds connected to each atom
+        num_bonds = [0] * len(atom_positions)
+        for b in bonds:
+            num_bonds[b[0]] += 1
+            num_bonds[b[1]] += 1
+
+        for i, pos in enumerate(atom_positions):
+            element = atom_elements[i]
+            chg = atom_charges[i]
+            z = pos[2] if len(pos) > 2 else 0.0
+
+            # In Option A: uncharged Carbon atoms with at least 1 bond are implicit vertices
+            if element == 'C' and chg == 0 and num_bonds[i] > 0:
+                continue
+
+            if color_mode == 'none':
+                atom_color = None
+            else:
+                base_color = CPK_COLORS.get(element, DEFAULT_ATOM_COLOR)
+                scale = get_depth_scale(z)
+                atom_color = (
+                    int(base_color[0] * scale),
+                    int(base_color[1] * scale),
+                    int(base_color[2] * scale)
+                )
+
+            sx, sy = self.map_subpixel_coords(pos[0], pos[1])
+            cx = int(sx) >> 1
+            cy = int(sy) >> 2
+
+            for ch_offset, ch in enumerate(element):
+                self.set_pixel_cell(cx + ch_offset, cy, ch, z=z + 0.1, color=atom_color)
+
+            if chg != 0:
+                sign_char = '+' if chg > 0 else '-'
+                ch_x = cx - 1
+                ch_y = cy - 1
+                bracket_color = (180, 180, 180) if color_mode != 'none' else None
+                sign_color = (255, 80, 80) if chg > 0 else (80, 160, 255)
+                if color_mode == 'none':
+                    self.set_pixel_cell(ch_x, ch_y, '[', z=z + 0.2)
+                    self.set_pixel_cell(ch_x + 1, ch_y, sign_char, z=z + 0.2)
+                    self.set_pixel_cell(ch_x + 2, ch_y, str(abs(chg)), z=z + 0.2)
+                    self.set_pixel_cell(ch_x + 3, ch_y, ']', z=z + 0.2)
+                else:
+                    scale = get_depth_scale(z)
+                    b_col = (int(180 * scale), int(180 * scale), int(180 * scale))
+                    n_col = (int(240 * scale), int(240 * scale), int(240 * scale))
+                    s_col = (int(sign_color[0] * scale), int(sign_color[1] * scale), int(sign_color[2] * scale))
+                    self.set_pixel_cell(ch_x, ch_y, '[', z=z + 0.2, color=b_col)
+                    self.set_pixel_cell(ch_x + 1, ch_y, sign_char, z=z + 0.2, color=s_col)
+                    self.set_pixel_cell(ch_x + 2, ch_y, str(abs(chg)), z=z + 0.2, color=n_col)
+                    self.set_pixel_cell(ch_x + 3, ch_y, ']', z=z + 0.2, color=b_col)
 
     def draw_bonds(self, atom_positions, bonds, atom_elements=None,
                    bond_orders=None, style='symbols', color_mode='cpk', get_depth_scale=None):

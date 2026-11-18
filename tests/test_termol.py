@@ -590,5 +590,46 @@ def test_termol_cli_no_color_flag(monkeypatch, capsys):
     assert "C" in captured
 
 
+def test_small_molecule_braille_style():
+    """Verify high-resolution Braille mode renders braille glyphs and heteroatom labels."""
+    from termol.canvas import MoleculeCanvas
+
+    canvas = MoleculeCanvas(60, 30, 60.0, 30.0, aspect_ratio=2.0, style='braille', bond_spacing=3.0)
+    # Ethanol: C-C-O
+    positions = [(-10.0, 0.0, 0.0), (0.0, 0.0, 0.0), (10.0, 0.0, 0.0)]
+    elements = ['C', 'C', 'O']
+    charges = [0, 0, 0]
+    bonds = [(0, 1), (1, 2)]
+    bond_orders = [1.0, 1.0]
+
+    canvas.draw_molecules(positions, elements, charges, bonds, bond_orders=bond_orders, style='braille')
+    plain = canvas.render_plain()
+
+    # Heteroatom 'O' should be explicitly present
+    assert 'O' in plain
+    # Uncharged bonded Carbons are implicit in skeletal style (not 'C')
+    assert 'C' not in plain
+    # Braille Unicode characters (0x2800..0x28FF) should be present
+    has_braille = any(0x2800 <= ord(ch) <= 0x28FF for ch in plain)
+    assert has_braille
+
+
+def test_termol_cli_braille_style_and_spacing(monkeypatch, capsys):
+    """Verify CLI invocation with --style braille and --spacing."""
+    import sys
+    from termol.cli import termol_cli
+
+    monkeypatch.setattr(sys, 'argv', ['termol', 'CC(=O)O', '--show2D', '--style', 'braille', '--spacing', '3.5'])
+    termol_cli()
+
+    captured = capsys.readouterr().out
+    assert "BRAILLE" in captured
+    assert "SPACING 3.5" in captured
+    assert "O" in captured
+    has_braille = any(0x2800 <= ord(ch) <= 0x28FF for ch in captured)
+    assert has_braille
+
+
+
 
 
