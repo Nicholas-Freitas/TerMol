@@ -37,6 +37,7 @@ class ResidueCA:
     coord: np.ndarray  # shape (3,)
     ss: str = 'C'       # 'H' (helix), 'E' (sheet/strand), 'C' (coil/loop)
     b_factor: float = 0.0
+    o_coord: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -138,6 +139,7 @@ def parse_pdb_text(pdb_text: str, title: str = "") -> ProteinStructure:
     header_title = ""
 
     seen_ca: set = set()  # (chain, res_num, alt_loc)
+    seen_o: Dict[Tuple[str, int], np.ndarray] = {}
 
     for line in lines:
         if line.startswith('TITLE') and not header_title:
@@ -212,6 +214,10 @@ def parse_pdb_text(pdb_text: str, title: str = "") -> ProteinStructure:
                         b_factor=b_factor
                     ))
 
+            # Backbone carbonyl oxygen
+            elif atom_name == 'O':
+                seen_o[(chain_id, res_num)] = coord
+
             # Non-water ligand atom
             elif line.startswith('HETATM') and res_name not in WATER_RESIDUES:
                 ligands.append(LigandAtom(
@@ -221,6 +227,11 @@ def parse_pdb_text(pdb_text: str, title: str = "") -> ProteinStructure:
                     chain_id=chain_id,
                     coord=coord
                 ))
+
+    # Attach carbonyl oxygens to matching residues
+    for ch, ca_list in chains.items():
+        for res in ca_list:
+            res.o_coord = seen_o.get((ch, res.res_num))
 
     structure.chains = chains
     structure.ligands = ligands

@@ -39,6 +39,7 @@ Additional arguments include:
 - `--names`: The molecule names to be displayed (separated by spaces).
 - `--width, --height`: The size of the 'screen' (in number of characters) Default 80x40. In the 3D viewer, if width and height aren't specified, the viewer will resize to fill the terminal window.
 - `--show2D`: Display in 2D instead of 3D.
+- `--rep, --representation`: For proteins: `trace` (1D Catmull-Rom spline, default), `cartoon` or `ribbon` (secondary structure flat ribbons and arrowheads), or `tube` (uniform 3D thickness).
 - `--style`: For proteins: `ascii` (depth ramp, default) or `braille` (high-resolution subpixel curves).
 - `--color`: For proteins: `depth` (default luminance depth cueing), `rainbow` (N-to-C spectrum), `ss` (secondary structure: helices/sheets/loops), or `none`.
 - `--add_hydrogens`: Have RDKit attempt to add hydrogens automatically. Default False.
@@ -48,11 +49,14 @@ Additional arguments include:
 TerMol now automatically recognizes macromolecular structures and proteins from `.pdb` files or 4-character RCSB PDB accession codes without any heavy external dependencies:
 
 ```bash
-# Render Ubiquitin by RCSB code:
-termol 1ubq
+# Render Ubiquitin in full secondary structure cartoon ribbon:
+termol 1ubq --rep cartoon --style braille --color ss
 
-# Render a local PDB file in 2D with Braille and secondary structure colors:
-termol my_protein.pdb --show2D --style braille --color ss
+# Render with 3D tube thickness:
+termol 1ubq --rep tube --style braille --color depth
+
+# Render a local PDB file in 2D with Braille ribbons:
+termol my_protein.pdb --show2D --rep cartoon --style braille --color ss
 
 # Render in pure plain ASCII (ideal for logging or piping):
 termol 1crn --show2D --style ascii --color none > protein.log
@@ -63,6 +67,7 @@ In the 3D viewer, the molecule or protein will initially rotate about the Y-axis
 - **Rotate**: Arrow keys, or WASD + QE.
 - **Pause/Resume**: Spacebar.
 - **Zoom**: `F` (zoom in / closer), `R` (zoom out / further away).
+- **Cycle Representation**: Press `M` to cycle between **Trace** (`trace`), **Cartoon** (`cartoon`), and **Tube** (`tube`).
 - **Toggle Protein Style**: Press `B` to toggle between **ASCII** density ramp and **Braille** subpixel curves.
 - **Cycle Protein Color**: Press `C` to cycle between **Depth** shading, **Rainbow** spectrum, **Secondary Structure** (`ss`), and plain text (`none`).
 - **Exit**: Hit any other key.

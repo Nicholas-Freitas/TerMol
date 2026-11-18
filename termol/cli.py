@@ -25,6 +25,10 @@ def termol_cli():
         '--color', choices=['depth', 'rainbow', 'ss', 'none'], default='depth',
         help='Color mode for proteins: "depth" (default luminance ramp), "rainbow" (N->C spectrum), "ss" (secondary structure), or "none".'
     )
+    parser.add_argument(
+        '--rep', '--representation', dest='rep', choices=['trace', 'cartoon', 'ribbon', 'tube'], default='trace',
+        help='Representation for proteins: "trace" (1D spline line, default), "cartoon"/"ribbon" (secondary structure ribbons & arrowheads), or "tube" (3D uniform thickness).'
+    )
     args = parser.parse_args()
 
     width_default = 80
@@ -81,7 +85,8 @@ def termol_cli():
         timeout=args.timeout,
         auto_resize=auto_resize,
         style=args.style,
-        color=args.color
+        color=args.color,
+        rep=args.rep
     )
 
 

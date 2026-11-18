@@ -25,7 +25,8 @@ class MoleculeData:
                  structure: Optional[ProteinStructure] = None,
                  backbone_segments: Optional[List[List[BackbonePoint]]] = None,
                  ligands: Optional[List[Any]] = None,
-                 name: Optional[str] = None):
+                 name: Optional[str] = None,
+                 representation: str = 'trace'):
         self.is_protein = is_protein
         self.atom_positions = atom_positions if atom_positions is not None else np.empty((0, 3))
         self.atom_elements = atom_elements if atom_elements is not None else []
@@ -35,6 +36,7 @@ class MoleculeData:
         self.backbone_segments = backbone_segments if backbone_segments is not None else []
         self.ligands = ligands if ligands is not None else []
         self.name = name
+        self.representation = representation
 
     def __iter__(self):
         # Allows legacy unpacking: atom_positions, atom_elements, atom_charges, bonds = data
@@ -47,7 +49,7 @@ class MoleculeData:
         return 4
 
 
-def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
+def get_molecule_data(input_mol, three_d=True, add_hydrogens=False, representation='trace'):
     """
     Load molecule data from SMILES string, chemical file (.sdf, .mol),
     PDB file (.pdb), or RCSB PDB 4-letter accession code (e.g. '1ubq').
@@ -67,8 +69,10 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
         try:
             structure = load_pdb(str(input_mol))
             if structure.is_protein:
-                # Generate Catmull-Rom backbone splines
-                backbone_segments = generate_backbone_points(structure, samples_per_res=8)
+                # Generate Catmull-Rom backbone splines with requested representation
+                backbone_segments = generate_backbone_points(
+                    structure, samples_per_res=8, representation=representation
+                )
                 ligands = structure.ligands
 
                 # Extract all coordinates to center and PCA-align
@@ -76,6 +80,12 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
                 for seg in backbone_segments:
                     for pt in seg:
                         all_coords_list.append(pt.coord)
+                        if pt.left_coord is not None:
+                            all_coords_list.append(pt.left_coord)
+                            all_coords_list.append(pt.right_coord)
+                        if pt.top_coord is not None:
+                            all_coords_list.append(pt.top_coord)
+                            all_coords_list.append(pt.bottom_coord)
                 if ligands:
                     for lig in ligands:
                         all_coords_list.append(lig.coord)
@@ -88,6 +98,12 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
                     for seg in backbone_segments:
                         for pt in seg:
                             pt.coord = pt.coord - center
+                            if pt.left_coord is not None:
+                                pt.left_coord = pt.left_coord - center
+                                pt.right_coord = pt.right_coord - center
+                            if pt.top_coord is not None:
+                                pt.top_coord = pt.top_coord - center
+                                pt.bottom_coord = pt.bottom_coord - center
                     for lig in ligands:
                         lig.coord = lig.coord - center
 
@@ -101,6 +117,12 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
                         for seg in backbone_segments:
                             for pt in seg:
                                 pt.coord = np.dot(pt.coord, rot)
+                                if pt.left_coord is not None:
+                                    pt.left_coord = np.dot(pt.left_coord, rot)
+                                    pt.right_coord = np.dot(pt.right_coord, rot)
+                                if pt.top_coord is not None:
+                                    pt.top_coord = np.dot(pt.top_coord, rot)
+                                    pt.bottom_coord = np.dot(pt.bottom_coord, rot)
                         for lig in ligands:
                             lig.coord = np.dot(lig.coord, rot)
 
@@ -119,7 +141,8 @@ def get_molecule_data(input_mol, three_d=True, add_hydrogens=False):
                     structure=structure,
                     backbone_segments=backbone_segments,
                     ligands=ligands,
-                    name=structure.title or str(input_mol)
+                    name=structure.title or str(input_mol),
+                    representation=representation
                 )
         except Exception as e:
             # Fall through to RDKit if it's a small molecule PDB or load_pdb failed

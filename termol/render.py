@@ -13,7 +13,7 @@ from .utilities import (
     get_molecule_data, MoleculeData,
     rotate_points, rotate_molecule_for_screen, scale_for_canvas, rotation_matrix
 )
-from .backbone import BackbonePoint
+from .backbone import BackbonePoint, generate_backbone_points
 from .pdb import is_pdb_code, clean_pdb_code
 
 
@@ -23,6 +23,12 @@ def scale_protein_for_canvas(backbone_segments: List[List[BackbonePoint]], ligan
     for seg in backbone_segments:
         for pt in seg:
             all_pts.append(pt.coord)
+            if pt.left_coord is not None:
+                all_pts.append(pt.left_coord)
+                all_pts.append(pt.right_coord)
+            if pt.top_coord is not None:
+                all_pts.append(pt.top_coord)
+                all_pts.append(pt.bottom_coord)
     for lig in ligands:
         all_pts.append(lig.coord)
 
@@ -43,11 +49,17 @@ def scale_protein_for_canvas(backbone_segments: List[List[BackbonePoint]], ligan
     for seg in backbone_segments:
         for pt in seg:
             pt.coord *= scale
+            if pt.left_coord is not None:
+                pt.left_coord *= scale
+                pt.right_coord *= scale
+            if pt.top_coord is not None:
+                pt.top_coord *= scale
+                pt.bottom_coord *= scale
     for lig in ligands:
         lig.coord *= scale
 
 
-def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='depth'):
+def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='depth', rep='trace'):
     """Render a static 2D snapshot of a small molecule or protein."""
     # Ensure stdout handles UTF-8 safely (e.g. for Braille)
     if hasattr(sys.stdout, 'reconfigure'):
@@ -65,8 +77,26 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='dep
             style=style, color_mode=color
         )
 
-        # Deep copy segments so original coordinates remain pristine
-        segments = copy.deepcopy(molecule_data.backbone_segments)
+        active_rep = rep or getattr(molecule_data, 'representation', 'trace')
+        if active_rep not in ('trace', 'cartoon', 'ribbon', 'tube'):
+            active_rep = 'trace'
+
+        # If representation differs from molecule_data's precomputed segments, regenerate
+        if active_rep != getattr(molecule_data, 'representation', 'trace') and molecule_data.structure:
+            segments = generate_backbone_points(molecule_data.structure, samples_per_res=8, representation=active_rep)
+            center = np.mean([pt.coord for seg in segments for pt in seg], axis=0)
+            for seg in segments:
+                for pt in seg:
+                    pt.coord -= center
+                    if pt.left_coord is not None:
+                        pt.left_coord -= center
+                        pt.right_coord -= center
+                    if pt.top_coord is not None:
+                        pt.top_coord -= center
+                        pt.bottom_coord -= center
+        else:
+            segments = copy.deepcopy(molecule_data.backbone_segments)
+
         ligands = copy.deepcopy(molecule_data.ligands)
 
         scale_protein_for_canvas(segments, ligands, protein_canvas)
@@ -75,6 +105,12 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='dep
         for seg in segments:
             for pt in seg:
                 pt.coord[1] /= protein_canvas.aspect_ratio
+                if pt.left_coord is not None:
+                    pt.left_coord[1] /= protein_canvas.aspect_ratio
+                    pt.right_coord[1] /= protein_canvas.aspect_ratio
+                if pt.top_coord is not None:
+                    pt.top_coord[1] /= protein_canvas.aspect_ratio
+                    pt.bottom_coord[1] /= protein_canvas.aspect_ratio
         for lig in ligands:
             lig.coord[1] /= protein_canvas.aspect_ratio
 
@@ -84,7 +120,7 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='dep
         if name or molecule_data.name:
             display_name = name or molecule_data.name
             res_count = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
-            header = f" {display_name} ({res_count} res) [{style.upper()} | {color.upper()}] "
+            header = f" {display_name} ({res_count} res) [{active_rep.upper()} | {style.upper()} | {color.upper()}] "
             if len(header) > protein_canvas.char_width - 6:
                 header = header[:protein_canvas.char_width - 10] + "... "
             print(header.center(protein_canvas.char_width, "="))
@@ -116,7 +152,7 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='ascii', color='dep
 
 
 def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
-                     auto_resize=True, style='ascii', color='depth'):
+                     auto_resize=True, style='ascii', color='depth', rep='trace'):
     """Interactive 3D curses renderer for small molecules and macromolecules."""
     curses.curs_set(0)
     stdscr.nodelay(1)
@@ -156,8 +192,13 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
     if is_protein:
         active_style = style
         active_color = color
+        active_rep = rep or getattr(molecule_data, 'representation', 'trace')
+        if active_rep not in ('trace', 'cartoon', 'tube'):
+            active_rep = 'cartoon' if active_rep == 'ribbon' else 'trace'
+
         color_modes = ['depth', 'rainbow', 'ss', 'none']
         styles = ['ascii', 'braille']
+        rep_modes = ['trace', 'cartoon', 'tube']
 
         protein_canvas = ProteinCanvas(
             canvas.char_width, canvas.char_height,
@@ -166,9 +207,26 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
             style=active_style, color_mode=active_color
         )
 
-        segments = copy.deepcopy(molecule_data.backbone_segments)
+        def build_segments(target_rep):
+            if target_rep == getattr(molecule_data, 'representation', 'trace'):
+                segs = copy.deepcopy(molecule_data.backbone_segments)
+            else:
+                segs = generate_backbone_points(molecule_data.structure, samples_per_res=8, representation=target_rep)
+                center = np.mean([pt.coord for s in segs for pt in s], axis=0)
+                for s in segs:
+                    for pt in s:
+                        pt.coord -= center
+                        if pt.left_coord is not None:
+                            pt.left_coord -= center
+                            pt.right_coord -= center
+                        if pt.top_coord is not None:
+                            pt.top_coord -= center
+                            pt.bottom_coord -= center
+            scale_protein_for_canvas(segs, ligands, protein_canvas)
+            return segs
+
         ligands = copy.deepcopy(molecule_data.ligands)
-        scale_protein_for_canvas(segments, ligands, protein_canvas)
+        segments = build_segments(active_rep)
     else:
         atom_positions, atom_elements, atom_charges, bonds = molecule_data
         atom_positions = atom_positions.copy()
@@ -205,7 +263,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
         if is_protein:
             display_name = name or molecule_data.name or "Protein"
             res_num = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
-            header_text = f" {display_name} ({res_num} res) [Style: {active_style.upper()} (B) | Color: {active_color.upper()} (C)] "
+            header_text = f" {display_name} ({res_num} res) [Rep: {active_rep.upper()} (M) | Style: {active_style.upper()} (B) | Color: {active_color.upper()} (C)] "
         elif name:
             header_text = f" {name} "
 
@@ -225,6 +283,12 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
                 for seg in segments:
                     for pt in seg:
                         pt.coord = np.dot(R, pt.coord)
+                        if pt.left_coord is not None:
+                            pt.left_coord = np.dot(R, pt.left_coord)
+                            pt.right_coord = np.dot(R, pt.right_coord)
+                        if pt.top_coord is not None:
+                            pt.top_coord = np.dot(R, pt.top_coord)
+                            pt.bottom_coord = np.dot(R, pt.bottom_coord)
                 for lig in ligands:
                     lig.coord = np.dot(R, lig.coord)
 
@@ -233,6 +297,12 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
             for seg in proj_segments:
                 for pt in seg:
                     pt.coord[1] /= protein_canvas.aspect_ratio
+                    if pt.left_coord is not None:
+                        pt.left_coord[1] /= protein_canvas.aspect_ratio
+                        pt.right_coord[1] /= protein_canvas.aspect_ratio
+                    if pt.top_coord is not None:
+                        pt.top_coord[1] /= protein_canvas.aspect_ratio
+                        pt.bottom_coord[1] /= protein_canvas.aspect_ratio
 
             proj_ligands = copy.deepcopy(ligands)
             for lig in proj_ligands:
@@ -319,6 +389,12 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
                     for seg in segments:
                         for pt in seg:
                             pt.coord *= 0.96
+                            if pt.left_coord is not None:
+                                pt.left_coord *= 0.96
+                                pt.right_coord *= 0.96
+                            if pt.top_coord is not None:
+                                pt.top_coord *= 0.96
+                                pt.bottom_coord *= 0.96
                     for lig in ligands:
                         lig.coord *= 0.96
                 else:
@@ -328,10 +404,21 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
                     for seg in segments:
                         for pt in seg:
                             pt.coord *= 1.04
+                            if pt.left_coord is not None:
+                                pt.left_coord *= 1.04
+                                pt.right_coord *= 1.04
+                            if pt.top_coord is not None:
+                                pt.top_coord *= 1.04
+                                pt.bottom_coord *= 1.04
                     for lig in ligands:
                         lig.coord *= 1.04
                 else:
                     atom_positions *= 1.02
+            elif key in [ord('M'), ord('m')] and is_protein:
+                # Cycle representation mode (trace -> cartoon -> tube)
+                idx = rep_modes.index(active_rep) if active_rep in rep_modes else 0
+                active_rep = rep_modes[(idx + 1) % len(rep_modes)]
+                segments = build_segments(active_rep)
             elif key in [ord('C'), ord('c')] and is_protein:
                 # Cycle color mode
                 idx = color_modes.index(active_color)
@@ -349,7 +436,7 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
 
 def draw(input_mol, name=None, width=80, height=40, three_d=True,
          add_hydrogens=False, timeout=None, stdscr=None, auto_resize=True,
-         style='ascii', color='depth'):
+         style='ascii', color='depth', rep='trace'):
     """
     Main function for TerMol. Renders small molecules or protein structures in 2D or 3D.
     Inputs:
@@ -360,38 +447,39 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
         three_d: Whether to display interactive 3D viewer (default True).
         style: For proteins: 'ascii' (default density ramp) or 'braille' (subpixel dots).
         color: For proteins: 'depth' (default luminance ramp), 'rainbow' (N->C), 'ss' (secondary structure), or 'none'.
+        rep: For proteins: 'trace' (default 1D line), 'cartoon'/'ribbon' (flat ribbons and arrows), or 'tube'.
     """
     if three_d:
         curses.wrapper(draw_persistent, input_mol, name=name, width=width, height=height,
                        three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
-                       auto_resize=auto_resize, style=style, color=color)
+                       auto_resize=auto_resize, style=style, color=color, rep=rep)
     else:
         draw_persistent(None, input_mol, name=name, width=width, height=height,
                         three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
-                        auto_resize=auto_resize, style=style, color=color)
+                        auto_resize=auto_resize, style=style, color=color, rep=rep)
 
 
 def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
                     three_d=True, add_hydrogens=False, timeout=None,
-                    auto_resize=True, style='ascii', color='depth'):
+                    auto_resize=True, style='ascii', color='depth', rep='trace'):
     """Persistent curses wrapper for draw."""
-    molecule_data = get_molecule_data(input_mol, three_d=three_d, add_hydrogens=add_hydrogens)
+    molecule_data = get_molecule_data(input_mol, three_d=three_d, add_hydrogens=add_hydrogens, representation=rep)
     canvas = MoleculeCanvas(width, height, float(width), float(height), aspect_ratio=2.0)
 
     if three_d:
         if stdscr:
             show_molecule_3D(stdscr, molecule_data, canvas, name=name, timeout=timeout,
-                             auto_resize=auto_resize, style=style, color=color)
+                             auto_resize=auto_resize, style=style, color=color, rep=rep)
         else:
             curses.wrapper(show_molecule_3D, molecule_data, canvas, name=name,
-                           timeout=timeout, auto_resize=auto_resize, style=style, color=color)
+                           timeout=timeout, auto_resize=auto_resize, style=style, color=color, rep=rep)
     else:
-        show_molecule_2D(molecule_data, canvas, name=name, style=style, color=color)
+        show_molecule_2D(molecule_data, canvas, name=name, style=style, color=color, rep=rep)
 
 
 def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
                add_hydrogens=False, timeout=None, auto_resize=True,
-               style='ascii', color='depth'):
+               style='ascii', color='depth', rep='trace'):
     """Render multiple molecules or proteins in sequence."""
     if names and len(names) != len(input_mols):
         raise ValueError("The number of names must match the number of inputs!")
@@ -409,7 +497,7 @@ def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
     if not three_d:
         for i in range(len(input_mols)):
             draw(input_mols[i], name=names[i], width=width, height=height,
-                 three_d=three_d, add_hydrogens=add_hydrogens, style=style, color=color)
+                 three_d=three_d, add_hydrogens=add_hydrogens, style=style, color=color, rep=rep)
         return
 
     def loop_molecules(stdscr, molecules, mol_names, loop_timeout=None):
@@ -418,7 +506,7 @@ def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
                 draw_persistent(stdscr, molecules[i], name=mol_names[i], timeout=loop_timeout,
                                 width=width, height=height, three_d=three_d,
                                 add_hydrogens=add_hydrogens, auto_resize=auto_resize,
-                                style=style, color=color)
+                                style=style, color=color, rep=rep)
             except Exception:
                 continue
 

@@ -159,3 +159,27 @@ def test_load_local_pdb(tmp_path):
     mol_data = get_molecule_data(str(pdb_file), three_d=False)
     assert mol_data.is_protein is True
     assert mol_data.structure.total_residues == 11
+
+
+def test_representations(capsys):
+    struct = parse_pdb_text(SAMPLE_PDB)
+
+    # Test trace
+    segs_trace = generate_backbone_points(struct, representation='trace')
+    assert segs_trace[0][0].left_coord is None
+
+    # Test cartoon
+    segs_cartoon = generate_backbone_points(struct, representation='cartoon')
+    assert segs_cartoon[0][0].left_coord is not None
+    assert segs_cartoon[0][0].right_coord is not None
+
+    # Test tube
+    segs_tube = generate_backbone_points(struct, representation='tube')
+    assert segs_tube[0][0].top_coord is not None
+    assert segs_tube[0][0].bottom_coord is not None
+
+    # Test drawing in all representations
+    for r in ['trace', 'cartoon', 'tube']:
+        termol.draw("1crn", three_d=False, style='braille', color='none', rep=r)
+        out = capsys.readouterr().out
+        assert "1CRN" in out

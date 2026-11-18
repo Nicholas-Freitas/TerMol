@@ -266,6 +266,12 @@ class ProteinCanvas(Canvas):
         for segment in backbone_segments:
             for pt in segment:
                 all_zs.append(pt.coord[2])
+                if pt.left_coord is not None:
+                    all_zs.append(pt.left_coord[2])
+                    all_zs.append(pt.right_coord[2])
+                if pt.top_coord is not None:
+                    all_zs.append(pt.top_coord[2])
+                    all_zs.append(pt.bottom_coord[2])
         if ligands:
             for lig in ligands:
                 all_zs.append(lig.coord[2])
@@ -323,92 +329,159 @@ class ProteinCanvas(Canvas):
             b = int(110 + 145 * val_depth)
             return r, g, b
 
+    def _draw_line_ascii(self, x1: float, y1: float, z1: float,
+                          x2: float, y2: float, z2: float,
+                          norm_pos: float, ss: str, z_min: float, z_range: float):
+        """Draw a 3D line segment on the ASCII canvas with depth testing and color."""
+        cx1, cy1 = self.map_coords(x1, y1)
+        cx2, cy2 = self.map_coords(x2, y2)
+        steps = max(abs(cx2 - cx1), abs(cy2 - cy1), 1)
+        for s in range(steps + 1):
+            frac = s / steps
+            ix = x1 + frac * (x2 - x1)
+            iy = y1 + frac * (y2 - y1)
+            iz = z1 + frac * (z2 - z1)
+            iz_norm = (iz - z_min) / z_range
+            ic_idx = int(iz_norm * (len(ASCII_RAMP) - 1))
+            ic_char = ASCII_RAMP[max(0, min(ic_idx, len(ASCII_RAMP) - 1))]
+            ic_color = self._get_color(iz_norm, norm_pos, ss)
+            self.set_pixel(ix, iy, ic_char, z=iz, color=ic_color)
+
+    def _draw_line_braille(self, x1: float, y1: float, z1: float,
+                            x2: float, y2: float, z2: float,
+                            norm_pos: float, ss: str, z_min: float, z_range: float):
+        """Draw a 3D line segment on the Braille subpixel grid with depth testing and color."""
+        span_x = self.max_x - self.min_x
+        span_y = self.max_y - self.min_y
+
+        sub_x1 = int(np.round(((x1 - self.min_x) / span_x) * (self.sub_width - 1)))
+        sub_y1 = int(np.round(((y1 - self.min_y) / span_y) * (self.sub_height - 1)))
+        sub_x2 = int(np.round(((x2 - self.min_x) / span_x) * (self.sub_width - 1)))
+        sub_y2 = int(np.round(((y2 - self.min_y) / span_y) * (self.sub_height - 1)))
+
+        steps = max(abs(sub_x2 - sub_x1), abs(sub_y2 - sub_y1), 1)
+        for s in range(steps + 1):
+            frac = s / steps
+            sub_x = int(np.round(sub_x1 + frac * (sub_x2 - sub_x1)))
+            sub_y = int(np.round(sub_y1 + frac * (sub_y2 - sub_y1)))
+            iz = z1 + frac * (z2 - z1)
+
+            if 0 <= sub_x < self.sub_width and 0 <= sub_y < self.sub_height:
+                if iz >= self.sub_z_buffer[sub_y, sub_x]:
+                    self.sub_z_buffer[sub_y, sub_x] = iz
+                    cx = sub_x // 2
+                    cy = sub_y // 4
+                    dx = sub_x % 2
+                    dy = sub_y % 4
+                    self.braille_bits[cy, cx] |= BRAILLE_DOT_MAP.get((dx, dy), 0)
+
+                    iz_norm = (iz - z_min) / z_range
+                    if iz >= self.z_buffer[cy, cx]:
+                        self.z_buffer[cy, cx] = iz
+                        self.color_data[cy][cx] = self._get_color(iz_norm, norm_pos, ss)
+
     def _draw_protein_ascii(self, backbone_segments, ligands, z_min: float, z_range: float):
         """Rasterize backbone segments onto ASCII grid using density ramp and Z-buffer."""
         for segment in backbone_segments:
             if not segment:
                 continue
 
-            for i in range(len(segment)):
-                pt = segment[i]
-                x, y, z = pt.coord
-                z_norm = (z - z_min) / z_range
-                color = self._get_color(z_norm, pt.norm_pos, pt.ss)
+            has_ribbon = segment[0].left_coord is not None
+            if not has_ribbon:
+                # Standard trace mode
+                for i in range(len(segment)):
+                    pt = segment[i]
+                    x, y, z = pt.coord
+                    z_norm = (z - z_min) / z_range
+                    color = self._get_color(z_norm, pt.norm_pos, pt.ss)
 
-                char_idx = int(z_norm * (len(ASCII_RAMP) - 1))
-                char = ASCII_RAMP[max(0, min(char_idx, len(ASCII_RAMP) - 1))]
+                    char_idx = int(z_norm * (len(ASCII_RAMP) - 1))
+                    char = ASCII_RAMP[max(0, min(char_idx, len(ASCII_RAMP) - 1))]
 
-                # Connect consecutive points with linear steps if needed
-                if i > 0:
-                    prev_pt = segment[i - 1]
-                    px, py, pz = prev_pt.coord
-                    cx1, cy1 = self.map_coords(px, py)
-                    cx2, cy2 = self.map_coords(x, y)
-                    steps = max(abs(cx2 - cx1), abs(cy2 - cy1), 1)
-                    for s in range(steps + 1):
-                        frac = s / steps
-                        ix = px + frac * (x - px)
-                        iy = py + frac * (y - py)
-                        iz = pz + frac * (z - pz)
-                        iz_norm = (iz - z_min) / z_range
-                        ic_idx = int(iz_norm * (len(ASCII_RAMP) - 1))
-                        ic_char = ASCII_RAMP[max(0, min(ic_idx, len(ASCII_RAMP) - 1))]
-                        ic_color = self._get_color(iz_norm, pt.norm_pos, pt.ss)
-                        self.set_pixel(ix, iy, ic_char, z=iz, color=ic_color)
-                else:
-                    self.set_pixel(x, y, char, z=z, color=color)
+                    if i > 0:
+                        prev_pt = segment[i - 1]
+                        px, py, pz = prev_pt.coord
+                        self._draw_line_ascii(px, py, pz, x, y, z, pt.norm_pos, pt.ss, z_min, z_range)
+                    else:
+                        self.set_pixel(x, y, char, z=z, color=color)
+            else:
+                # Ribbon / Tube / Cartoon mode
+                for i in range(len(segment)):
+                    pt = segment[i]
+                    lx, ly, lz = pt.left_coord
+                    rx, ry, rz = pt.right_coord
+                    # Draw cross-rung across ribbon width
+                    self._draw_line_ascii(lx, ly, lz, rx, ry, rz, pt.norm_pos, pt.ss, z_min, z_range)
+
+                    # Connect edges along length
+                    if i > 0:
+                        prev = segment[i - 1]
+                        plx, ply, plz = prev.left_coord
+                        prx, pry, prz = prev.right_coord
+                        self._draw_line_ascii(plx, ply, plz, lx, ly, lz, pt.norm_pos, pt.ss, z_min, z_range)
+                        self._draw_line_ascii(prx, pry, prz, rx, ry, rz, pt.norm_pos, pt.ss, z_min, z_range)
+
+                    # Tube vertical profile
+                    if pt.top_coord is not None and pt.bottom_coord is not None:
+                        tx, ty, tz = pt.top_coord
+                        bx, by, bz = pt.bottom_coord
+                        self._draw_line_ascii(tx, ty, tz, bx, by, bz, pt.norm_pos, pt.ss, z_min, z_range)
+                        if i > 0 and prev.top_coord is not None:
+                            ptx, pty, ptz = prev.top_coord
+                            pbx, pby, pbz = prev.bottom_coord
+                            self._draw_line_ascii(ptx, pty, ptz, tx, ty, tz, pt.norm_pos, pt.ss, z_min, z_range)
+                            self._draw_line_ascii(pbx, pby, pbz, bx, by, bz, pt.norm_pos, pt.ss, z_min, z_range)
 
         # Draw any bound ligands as prominent element markers
         if ligands:
             for lig in ligands:
                 lx, ly, lz = lig.coord
                 lz_norm = (lz - z_min) / z_range
-                # Golden/amber highlight for ligand atoms
                 lig_color = (255, 230, 80) if self.color_mode != 'none' else None
                 self.set_pixel(lx, ly, lig.element[:1].upper(), z=lz + 0.2, color=lig_color)
 
     def _draw_protein_braille(self, backbone_segments, ligands, z_min: float, z_range: float):
         """Rasterize backbone onto high-resolution 2x4 Braille subpixel grid."""
-        span_x = self.max_x - self.min_x
-        span_y = self.max_y - self.min_y
-
         for segment in backbone_segments:
             if not segment:
                 continue
 
-            for i in range(len(segment)):
-                pt = segment[i]
-                x, y, z = pt.coord
-                prev_pt = segment[i - 1] if i > 0 else pt
-                px, py, pz = prev_pt.coord
+            has_ribbon = segment[0].left_coord is not None
+            if not has_ribbon:
+                # Standard trace mode
+                for i in range(len(segment)):
+                    pt = segment[i]
+                    x, y, z = pt.coord
+                    prev_pt = segment[i - 1] if i > 0 else pt
+                    px, py, pz = prev_pt.coord
+                    self._draw_line_braille(px, py, pz, x, y, z, pt.norm_pos, pt.ss, z_min, z_range)
+            else:
+                # Ribbon / Tube / Cartoon mode
+                for i in range(len(segment)):
+                    pt = segment[i]
+                    lx, ly, lz = pt.left_coord
+                    rx, ry, rz = pt.right_coord
+                    # Draw cross-rung
+                    self._draw_line_braille(lx, ly, lz, rx, ry, rz, pt.norm_pos, pt.ss, z_min, z_range)
 
-                # Map real coords to subpixel coords
-                sub_x1 = int(np.round(((px - self.min_x) / span_x) * (self.sub_width - 1)))
-                sub_y1 = int(np.round(((py - self.min_y) / span_y) * (self.sub_height - 1)))
-                sub_x2 = int(np.round(((x - self.min_x) / span_x) * (self.sub_width - 1)))
-                sub_y2 = int(np.round(((y - self.min_y) / span_y) * (self.sub_height - 1)))
+                    # Connect edges along length
+                    if i > 0:
+                        prev = segment[i - 1]
+                        plx, ply, plz = prev.left_coord
+                        prx, pry, prz = prev.right_coord
+                        self._draw_line_braille(plx, ply, plz, lx, ly, lz, pt.norm_pos, pt.ss, z_min, z_range)
+                        self._draw_line_braille(prx, pry, prz, rx, ry, rz, pt.norm_pos, pt.ss, z_min, z_range)
 
-                steps = max(abs(sub_x2 - sub_x1), abs(sub_y2 - sub_y1), 1)
-
-                for s in range(steps + 1):
-                    frac = s / steps
-                    sub_x = int(np.round(sub_x1 + frac * (sub_x2 - sub_x1)))
-                    sub_y = int(np.round(sub_y1 + frac * (sub_y2 - sub_y1)))
-                    iz = pz + frac * (z - pz)
-
-                    if 0 <= sub_x < self.sub_width and 0 <= sub_y < self.sub_height:
-                        if iz >= self.sub_z_buffer[sub_y, sub_x]:
-                            self.sub_z_buffer[sub_y, sub_x] = iz
-                            cx = sub_x // 2
-                            cy = sub_y // 4
-                            dx = sub_x % 2
-                            dy = sub_y % 4
-                            self.braille_bits[cy, cx] |= BRAILLE_DOT_MAP.get((dx, dy), 0)
-
-                            iz_norm = (iz - z_min) / z_range
-                            if iz >= self.z_buffer[cy, cx]:
-                                self.z_buffer[cy, cx] = iz
-                                self.color_data[cy][cx] = self._get_color(iz_norm, pt.norm_pos, pt.ss)
+                    # Tube vertical profile
+                    if pt.top_coord is not None and pt.bottom_coord is not None:
+                        tx, ty, tz = pt.top_coord
+                        bx, by, bz = pt.bottom_coord
+                        self._draw_line_braille(tx, ty, tz, bx, by, bz, pt.norm_pos, pt.ss, z_min, z_range)
+                        if i > 0 and prev.top_coord is not None:
+                            ptx, pty, ptz = prev.top_coord
+                            pbx, pby, pbz = prev.bottom_coord
+                            self._draw_line_braille(ptx, pty, ptz, tx, ty, tz, pt.norm_pos, pt.ss, z_min, z_range)
+                            self._draw_line_braille(pbx, pby, pbz, bx, by, bz, pt.norm_pos, pt.ss, z_min, z_range)
 
         # Convert accumulated Braille bits to Unicode characters
         for cy in range(self.char_height):
