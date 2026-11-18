@@ -32,7 +32,7 @@ def termol_cli():
     )
     parser.add_argument(
         '--backend', choices=['ansi', 'curses'], default='ansi',
-        help='Interactive 3D rendering backend: "ansi" (24-bit TrueColor with mouse drag/scroll, default) or "curses" (legacy curses).'
+        help='Interactive 3D rendering backend: "ansi" (24-bit TrueColor with responsive keyboard navigation, default) or "curses" (legacy curses).'
     )
     args = parser.parse_args()
 

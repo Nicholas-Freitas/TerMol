@@ -581,7 +581,7 @@ INCOMPLETE_ESC_PATTERN = re.compile(r'\x1b(\[[0-9;?<=]*)?$')
 
 
 class AnsiTerminalSession:
-    """Context manager for full-screen ANSI terminal session with SGR mouse and raw input."""
+    """Context manager for full-screen ANSI terminal session with raw input."""
 
     def __init__(self):
         self.h_out = None
@@ -612,10 +612,8 @@ class AnsiTerminalSession:
                 if kernel32.GetConsoleMode(h_in, ctypes.byref(in_m)):
                     self.h_in = h_in
                     self.orig_in_mode = in_m.value
-                    # ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200, ENABLE_WINDOW_INPUT = 0x0008, ENABLE_MOUSE_INPUT = 0x0010, ENABLE_EXTENDED_FLAGS = 0x0080
-                    # Clear ENABLE_QUICK_EDIT_MODE (0x0040) so mouse clicks are not intercepted for text selection
-                    new_in = (self.orig_in_mode | 0x0200 | 0x0010 | 0x0008 | 0x0080) & ~0x0040
-                    kernel32.SetConsoleMode(h_in, new_in)
+                    # ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200, ENABLE_WINDOW_INPUT = 0x0008
+                    kernel32.SetConsoleMode(h_in, self.orig_in_mode | 0x0200 | 0x0008)
             except Exception:
                 pass
         else:
@@ -627,14 +625,12 @@ class AnsiTerminalSession:
             except Exception:
                 pass
 
-        # Switch to alternate screen, hide cursor, clear, enable mouse tracking
+        # Switch to alternate screen, hide cursor, clear screen
         # \033[?1049h: Alternate screen buffer
         # \033[?25l: Hide cursor
         # \033[2J\033[H: Clear screen & move cursor to top-left
-        # \033[?1002h: Button-motion tracking (reports movement only when dragging)
-        # \033[?1006h: SGR extended coordinates mode
         try:
-            sys.stdout.write("\033[?1049h\033[?25l\033[2J\033[H\033[?1002h\033[?1006h")
+            sys.stdout.write("\033[?1049h\033[?25l\033[2J\033[H")
             sys.stdout.flush()
         except Exception:
             pass
@@ -812,27 +808,21 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
             for lig in ligands:
                 lig.coord *= factor
 
-        def apply_protein_rotation_delta(dx: float, dy: float):
+        def apply_protein_rotation_step(axis, angle_deg=5.0):
             nonlocal cum_R
-            if dx == 0 and dy == 0:
-                return
-            ang_y = dx * 0.04
-            ang_x = -dy * 0.06
-            Ry = rotation_matrix((0, 1, 0), ang_y)
-            Rx = rotation_matrix((1, 0, 0), ang_x)
-            R_comb = np.dot(Rx, Ry)
-            cum_R = np.dot(R_comb, cum_R)
+            R = rotation_matrix(axis, np.radians(angle_deg))
+            cum_R = np.dot(R, cum_R)
             for seg in segments:
                 for pt in seg:
-                    pt.coord = np.dot(R_comb, pt.coord)
+                    pt.coord = np.dot(R, pt.coord)
                     if pt.left_coord is not None:
-                        pt.left_coord = np.dot(R_comb, pt.left_coord)
-                        pt.right_coord = np.dot(R_comb, pt.right_coord)
+                        pt.left_coord = np.dot(R, pt.left_coord)
+                        pt.right_coord = np.dot(R, pt.right_coord)
                     if pt.top_coord is not None:
-                        pt.top_coord = np.dot(R_comb, pt.top_coord)
-                        pt.bottom_coord = np.dot(R_comb, pt.bottom_coord)
+                        pt.top_coord = np.dot(R, pt.top_coord)
+                        pt.bottom_coord = np.dot(R, pt.bottom_coord)
             for lig in ligands:
-                lig.coord = np.dot(R_comb, lig.coord)
+                lig.coord = np.dot(R, lig.coord)
 
         segments = get_segments(active_rep)
     else:
@@ -849,23 +839,14 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
             mol_zoom_scale = new_scale
             atom_positions *= factor
 
-        def apply_mol_rotation_delta(dx: float, dy: float):
+        def apply_mol_rotation_step(axis, angle_deg=5.0):
             nonlocal atom_positions
-            if dx == 0 and dy == 0:
-                return
-            ang_y = dx * 0.04
-            ang_x = -dy * 0.06
-            Ry = rotation_matrix((0, 1, 0), ang_y)
-            Rx = rotation_matrix((1, 0, 0), ang_x)
-            R_comb = np.dot(Rx, Ry)
-            atom_positions = np.dot(atom_positions, R_comb.T)
+            atom_positions = rotate_points(atom_positions, axis, np.radians(angle_deg))
 
     end_time = time.time() + timeout if timeout else None
     rotation_axis = (0, 1, 0)
     rotation_paused = False
     theta = 1.2
-    dragging = False
-    last_mouse_pos = None
 
     fps_history = []
     last_frame_time = time.perf_counter()
@@ -900,8 +881,8 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                         pass
 
                 if is_protein:
-                    # Rotate protein if auto-spinning and not actively dragging
-                    if not rotation_paused and not dragging:
+                    # Rotate protein if auto-spinning
+                    if not rotation_paused:
                         R = rotation_matrix(rotation_axis, np.radians(theta))
                         cum_R = np.dot(R, cum_R)
                         for seg in segments:
@@ -923,9 +904,9 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
 
                     display_name = name or molecule_data.name or "Protein"
                     res_num = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
-                    header_text = f" {display_name} ({res_num} res) [{active_rep.upper()} (M) | {active_style.upper()} (B) | {active_color.upper()} (C) | Drag: rotate | Scroll: zoom] "
+                    header_text = f" {display_name} ({res_num} res) [{active_rep.upper()} (M) | {active_style.upper()} (B) | {active_color.upper()} (C) | Arrows/WASD: steer | Space: pause | +/-: zoom] "
                     if len(header_text) > protein_canvas.char_width - 6:
-                        header_text = f" {display_name} [{active_rep.upper()} | {active_style.upper()} | {active_color.upper()}] "
+                        header_text = f" {display_name} [{active_rep.upper()} | {active_style.upper()} | {active_color.upper()} | Arrows: steer] "
                     if len(header_text) > protein_canvas.char_width - 6:
                         header_text = header_text[:protein_canvas.char_width - 10] + "... "
                     header_line = header_text.center(protein_canvas.char_width, "=")
@@ -941,7 +922,7 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                     sys.stdout.flush()
                 else:
                     # Small molecule
-                    if not rotation_paused and not dragging:
+                    if not rotation_paused:
                         atom_positions = rotate_points(atom_positions, rotation_axis, np.radians(theta))
 
                     stretched = atom_positions.copy()
@@ -952,7 +933,7 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                     canvas.draw_molecules(positions_2D, atom_elements, atom_charges, bonds)
 
                     display_name = name or "Molecule"
-                    header_text = f" {display_name} [Small Mol | Drag: rotate | Scroll: zoom] "
+                    header_text = f" {display_name} [Small Mol | Arrows/WASD: steer | Space: pause | +/-: zoom | Q: quit] "
                     if len(header_text) > canvas.char_width - 6:
                         header_text = header_text[:canvas.char_width - 10] + "... "
                     header_line = header_text.center(canvas.char_width, "=")
@@ -967,63 +948,39 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                 time.sleep(0.025)
                 raw_input = read_available_input()
                 if raw_input:
-                    # 1. Parse mouse events
-                    total_dx = 0
-                    total_dy = 0
-                    for m in MOUSE_SGR_PATTERN.finditer(raw_input):
-                        btn = int(m.group(1))
-                        col = int(m.group(2))
-                        row = int(m.group(3))
-                        act = m.group(4)
-
-                        if act == 'M':
-                            if btn == 64:
-                                if is_protein:
-                                    apply_protein_zoom(1.05)
-                                else:
-                                    apply_mol_zoom(1.05)
-                            elif btn == 65:
-                                if is_protein:
-                                    apply_protein_zoom(0.95)
-                                else:
-                                    apply_mol_zoom(0.95)
-                            elif (btn & 32) == 0 and (btn & 3) == 0:
-                                # Left button pressed down (click down)
-                                dragging = True
-                                last_mouse_pos = (col, row)
-                                rotation_paused = True
-                            elif dragging and last_mouse_pos is not None:
-                                # Mouse motion while holding button down
-                                dx = col - last_mouse_pos[0]
-                                dy = row - last_mouse_pos[1]
-                                if dx != 0 or dy != 0:
-                                    total_dx += dx
-                                    total_dy += dy
-                                    last_mouse_pos = (col, row)
-                        elif act == 'm':
-                            # Button released
-                            dragging = False
-                            last_mouse_pos = None
-
-                    if total_dx != 0 or total_dy != 0:
-                        if is_protein:
-                            apply_protein_rotation_delta(total_dx, total_dy)
-                        else:
-                            apply_mol_rotation_delta(total_dx, total_dy)
-
-                    # 2. Parse keyboard events
+                    # 1. Parse arrow keys (CSI sequences)
                     if '\x1b[A' in raw_input:
-                        rotation_axis = (1, 0, 0)
-                        rotation_paused = False
+                        if rotation_paused:
+                            if is_protein:
+                                apply_protein_rotation_step((1, 0, 0), 5.0)
+                            else:
+                                apply_mol_rotation_step((1, 0, 0), 5.0)
+                        else:
+                            rotation_axis = (1, 0, 0)
                     elif '\x1b[B' in raw_input:
-                        rotation_axis = (-1, 0, 0)
-                        rotation_paused = False
+                        if rotation_paused:
+                            if is_protein:
+                                apply_protein_rotation_step((-1, 0, 0), 5.0)
+                            else:
+                                apply_mol_rotation_step((-1, 0, 0), 5.0)
+                        else:
+                            rotation_axis = (-1, 0, 0)
                     elif '\x1b[C' in raw_input:
-                        rotation_axis = (0, -1, 0)
-                        rotation_paused = False
+                        if rotation_paused:
+                            if is_protein:
+                                apply_protein_rotation_step((0, -1, 0), 5.0)
+                            else:
+                                apply_mol_rotation_step((0, -1, 0), 5.0)
+                        else:
+                            rotation_axis = (0, -1, 0)
                     elif '\x1b[D' in raw_input:
-                        rotation_axis = (0, 1, 0)
-                        rotation_paused = False
+                        if rotation_paused:
+                            if is_protein:
+                                apply_protein_rotation_step((0, 1, 0), 5.0)
+                            else:
+                                apply_mol_rotation_step((0, 1, 0), 5.0)
+                        else:
+                            rotation_axis = (0, 1, 0)
 
                     # Strip all CSI escape sequences and trailing incomplete sequences
                     key_chars = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_input))
@@ -1038,30 +995,53 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                         elif ch == ' ':
                             rotation_paused = not rotation_paused
                         elif ch in ('a', 'A'):
-                            rotation_axis = (0, 1, 0)
-                            rotation_paused = False
+                            if rotation_paused:
+                                if is_protein:
+                                    apply_protein_rotation_step((0, 1, 0), 5.0)
+                                else:
+                                    apply_mol_rotation_step((0, 1, 0), 5.0)
+                            else:
+                                rotation_axis = (0, 1, 0)
                         elif ch in ('d', 'D'):
-                            rotation_axis = (0, -1, 0)
-                            rotation_paused = False
+                            if rotation_paused:
+                                if is_protein:
+                                    apply_protein_rotation_step((0, -1, 0), 5.0)
+                                else:
+                                    apply_mol_rotation_step((0, -1, 0), 5.0)
+                            else:
+                                rotation_axis = (0, -1, 0)
                         elif ch in ('w', 'W'):
-                            rotation_axis = (1, 0, 0)
-                            rotation_paused = False
+                            if rotation_paused:
+                                if is_protein:
+                                    apply_protein_rotation_step((1, 0, 0), 5.0)
+                                else:
+                                    apply_mol_rotation_step((1, 0, 0), 5.0)
+                            else:
+                                rotation_axis = (1, 0, 0)
                         elif ch in ('s', 'S'):
-                            rotation_axis = (-1, 0, 0)
-                            rotation_paused = False
+                            if rotation_paused:
+                                if is_protein:
+                                    apply_protein_rotation_step((-1, 0, 0), 5.0)
+                                else:
+                                    apply_mol_rotation_step((-1, 0, 0), 5.0)
+                            else:
+                                rotation_axis = (-1, 0, 0)
                         elif ch in ('e', 'E'):
                             rotation_axis = (0, 0, 1)
-                            rotation_paused = False
-                        elif ch in ('r', 'R'):
+                        elif ch in ('+', '=', 'r', 'R'):
                             if is_protein:
-                                apply_protein_zoom(0.96)
+                                apply_protein_zoom(1.05)
                             else:
-                                apply_mol_zoom(0.96)
-                        elif ch in ('f', 'F'):
+                                apply_mol_zoom(1.05)
+                        elif ch in ('-', '_', 'f', 'F'):
                             if is_protein:
-                                apply_protein_zoom(1.04)
+                                apply_protein_zoom(0.95)
                             else:
-                                apply_mol_zoom(1.04)
+                                apply_mol_zoom(0.95)
+                        elif ch in ('[', '{'):
+                            theta = max(0.2, theta - 0.3)
+                        elif ch in (']', '}'):
+                            theta = min(8.0, theta + 0.3)
                         elif ch in ('m', 'M') and is_protein:
                             idx = rep_modes.index(active_rep) if active_rep in rep_modes else 0
                             active_rep = rep_modes[(idx + 1) % len(rep_modes)]

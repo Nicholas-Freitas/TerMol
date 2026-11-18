@@ -341,33 +341,29 @@ def test_depth_color_modes_ansi_render():
         assert "\033[" in ansi_out
 
 
-def test_mouse_sgr_pattern_parsing():
-    """Verify SGR 1006 mouse event sequence parser."""
-    from termol.render import MOUSE_SGR_PATTERN
+def test_escape_sequence_parsing_no_premature_quit():
+    """Verify escape sequences and keys do not prematurely trigger viewer exit."""
+    from termol.render import CSI_PATTERN, INCOMPLETE_CSI_PATTERN
 
-    raw = "\x1b[<0;40;20M\x1b[<32;42;22M\x1b[<0;42;22m\x1b[<64;50;25M\x1b[<65;50;25M"
-    matches = list(MOUSE_SGR_PATTERN.finditer(raw))
-    assert len(matches) == 5
+    raw_partial = "\x1b[A\x1b["
+    raw_arrow = "\x1b[A"
+    raw_quit_key = "q"
+    raw_esc_key = "\x1b"
 
-    # Left button press at (40, 20)
-    assert int(matches[0].group(1)) == 0
-    assert int(matches[0].group(2)) == 40
-    assert int(matches[0].group(3)) == 20
-    assert matches[0].group(4) == 'M'
+    # Partial CSI stream: should strip completely
+    cleaned_partial = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_partial))
+    assert cleaned_partial == ""
 
-    # Mouse drag at (42, 22)
-    assert int(matches[1].group(1)) == 32
-    assert int(matches[1].group(2)) == 42
-    assert int(matches[1].group(3)) == 22
-    assert matches[1].group(4) == 'M'
+    # Arrow key stream: should strip to empty
+    cleaned_arrow = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_arrow))
+    assert cleaned_arrow == ""
 
-    # Release
-    assert int(matches[2].group(1)) == 0
-    assert matches[2].group(4) == 'm'
+    # Standalone Escape key: recognized as standalone '\x1b'
+    assert raw_esc_key == '\x1b'
 
-    # Scroll up / down
-    assert int(matches[3].group(1)) == 64
-    assert int(matches[4].group(1)) == 65
+    # Quit key 'q': recognized
+    cleaned_q = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_quit_key))
+    assert any(c in ('q', 'Q', 'x', 'X') for c in cleaned_q)
 
 
 def test_ansi_3d_viewer_protein_timeout():
@@ -391,83 +387,6 @@ def test_ansi_3d_viewer_small_mol_timeout():
     mol_data = get_molecule_data("c1ccccc1", three_d=True)
     canvas = MoleculeCanvas(60, 30, 60.0, 30.0, aspect_ratio=2.0)
     show_molecule_3D_ansi(mol_data, canvas, timeout=0.05, auto_resize=False)
-
-
-def test_escape_sequence_parsing_no_premature_quit():
-    """Verify mouse events and escape sequences do not prematurely trigger viewer exit."""
-    from termol.render import CSI_PATTERN, INCOMPLETE_CSI_PATTERN
-
-    # Typical raw input stream from rapid mouse drag & scroll events
-    raw_drag = "\x1b[<32;40;20M\x1b[<32;42;21M\x1b[<32;45;22M"
-    raw_partial = "\x1b[<32;40;20M\x1b[<"
-    raw_arrow = "\x1b[A"
-    raw_quit_key = "q"
-    raw_esc_key = "\x1b"
-
-    # Drag stream: should strip completely, leaving no characters
-    cleaned_drag = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_drag))
-    assert cleaned_drag == ""
-    assert not any(c in ('q', 'Q', 'x', 'X') for c in cleaned_drag)
-    assert raw_drag != '\x1b'
-
-    # Partial CSI stream: should also strip completely
-    cleaned_partial = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_partial))
-    assert cleaned_partial == ""
-
-    # Arrow key stream: should strip to empty
-    cleaned_arrow = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_arrow))
-    assert cleaned_arrow == ""
-
-    # Standalone Escape key: recognized as standalone '\x1b'
-    assert raw_esc_key == '\x1b'
-
-    # Quit key 'q': recognized
-    cleaned_q = INCOMPLETE_CSI_PATTERN.sub('', CSI_PATTERN.sub('', raw_quit_key))
-    assert any(c in ('q', 'Q', 'x', 'X') for c in cleaned_q)
-
-
-def test_mouse_click_hold_drag_events():
-    """Verify stationary click, hold, drag motion, and release tracking."""
-    from termol.render import MOUSE_SGR_PATTERN
-
-    # Sequence:
-    # 1. Left button down at (40, 20)
-    # 2. Drag to (43, 22)
-    # 3. Release button at (43, 22)
-    # 4. Stray move after release (should be ignored, not trigger dragging)
-    events = "\x1b[<0;40;20M\x1b[<32;43;22M\x1b[<0;43;22m\x1b[<35;50;30M"
-
-    dragging = False
-    last_mouse_pos = None
-    total_dx = 0
-    total_dy = 0
-
-    for m in MOUSE_SGR_PATTERN.finditer(events):
-        btn = int(m.group(1))
-        col = int(m.group(2))
-        row = int(m.group(3))
-        act = m.group(4)
-
-        if act == 'M':
-            if (btn & 32) == 0 and (btn & 3) == 0:
-                dragging = True
-                last_mouse_pos = (col, row)
-            elif dragging and last_mouse_pos is not None:
-                dx = col - last_mouse_pos[0]
-                dy = row - last_mouse_pos[1]
-                if dx != 0 or dy != 0:
-                    total_dx += dx
-                    total_dy += dy
-                    last_mouse_pos = (col, row)
-        elif act == 'm':
-            dragging = False
-            last_mouse_pos = None
-
-    # Total movement should be dx=+3, dy=+2, and dragging should be False after release
-    assert total_dx == 3
-    assert total_dy == 2
-    assert dragging is False
-    assert last_mouse_pos is None
 
 
 
