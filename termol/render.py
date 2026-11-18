@@ -631,11 +631,10 @@ class AnsiTerminalSession:
         # \033[?1049h: Alternate screen buffer
         # \033[?25l: Hide cursor
         # \033[2J\033[H: Clear screen & move cursor to top-left
-        # \033[?1002h: Button-motion tracking (reports movement when dragging)
-        # \033[?1003h: Any-event tracking (reports all motion)
+        # \033[?1002h: Button-motion tracking (reports movement only when dragging)
         # \033[?1006h: SGR extended coordinates mode
         try:
-            sys.stdout.write("\033[?1049h\033[?25l\033[2J\033[H\033[?1002h\033[?1003h\033[?1006h")
+            sys.stdout.write("\033[?1049h\033[?25l\033[2J\033[H\033[?1002h\033[?1006h")
             sys.stdout.flush()
         except Exception:
             pass
@@ -988,8 +987,8 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                                     apply_protein_zoom(0.95)
                                 else:
                                     apply_mol_zoom(0.95)
-                            elif not dragging and ((btn & 3) == 0 or btn == 0 or btn == 32):
-                                # Click down or drag started with left button
+                            elif (btn & 32) == 0 and (btn & 3) == 0:
+                                # Left button pressed down (click down)
                                 dragging = True
                                 last_mouse_pos = (col, row)
                                 rotation_paused = True

@@ -434,7 +434,8 @@ def test_mouse_click_hold_drag_events():
     # 1. Left button down at (40, 20)
     # 2. Drag to (43, 22)
     # 3. Release button at (43, 22)
-    events = "\x1b[<0;40;20M\x1b[<32;43;22M\x1b[<0;43;22m"
+    # 4. Stray move after release (should be ignored, not trigger dragging)
+    events = "\x1b[<0;40;20M\x1b[<32;43;22M\x1b[<0;43;22m\x1b[<35;50;30M"
 
     dragging = False
     last_mouse_pos = None
@@ -448,7 +449,7 @@ def test_mouse_click_hold_drag_events():
         act = m.group(4)
 
         if act == 'M':
-            if not dragging and ((btn & 3) == 0 or btn == 0 or btn == 32):
+            if (btn & 32) == 0 and (btn & 3) == 0:
                 dragging = True
                 last_mouse_pos = (col, row)
             elif dragging and last_mouse_pos is not None:
