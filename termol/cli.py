@@ -20,12 +20,8 @@ def termol_cli():
     parser.add_argument('--timeout', type=int, default=None, help='3D window will close after this number of seconds (default indefinitely).')
     parser.add_argument(
         '--style', default=None,
-        help='Rendering style: for small molecules: "symbols" (chemical symbols, default), "balls", "dots", or "braille" (high-res subpixel line drawing); '
+        help='Rendering style: for small molecules: "symbols" (chemical symbols, default), "balls" (spherical ball-and-stick), or "braille" (high-res subpixel line drawing); '
              'for proteins: "braille" (subpixel dots, default) or "ascii".'
-    )
-    parser.add_argument(
-        '--bond-spacing', '--spacing', dest='bond_spacing', type=float, default=3.0,
-        help='Spacing between parallel lines for double/triple/aromatic bonds in braille mode (default 3.0 subpixels).'
     )
     parser.add_argument(
         '--color', default=None,
@@ -122,8 +118,7 @@ def termol_cli():
         style=args.style,
         color=args.color,
         rep=args.rep,
-        backend=args.backend,
-        bond_spacing=args.bond_spacing
+        backend=args.backend
     )
 
 

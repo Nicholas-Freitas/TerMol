@@ -553,12 +553,11 @@ def test_bond_orders_and_aromaticity_rendering():
     assert '╌' in plain
 
 
-def test_small_molecule_styles_balls_and_dots():
-    """Verify balls and dots visual styles for small molecules."""
+def test_small_molecule_styles_balls():
+    """Verify balls visual style for small molecules."""
     from termol.canvas import MoleculeCanvas
 
     canvas_balls = MoleculeCanvas(40, 20, 40.0, 20.0, aspect_ratio=2.0, style='balls')
-    canvas_dots = MoleculeCanvas(40, 20, 40.0, 20.0, aspect_ratio=2.0, style='dots')
 
     positions = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0)]
     elements = ['C', 'S']
@@ -570,10 +569,6 @@ def test_small_molecule_styles_balls_and_dots():
     # Carbon should be '●', Sulfur (larger atom) should be '◉'
     assert '●' in plain_balls
     assert '◉' in plain_balls
-
-    canvas_dots.draw_molecules(positions, elements, charges, bonds, style='dots')
-    plain_dots = canvas_dots.render_plain()
-    assert '•' in plain_dots
 
 
 def test_termol_cli_no_color_flag(monkeypatch, capsys):
@@ -594,7 +589,7 @@ def test_small_molecule_braille_style():
     """Verify high-resolution Braille mode renders braille glyphs and heteroatom labels."""
     from termol.canvas import MoleculeCanvas
 
-    canvas = MoleculeCanvas(60, 30, 60.0, 30.0, aspect_ratio=2.0, style='braille', bond_spacing=3.0)
+    canvas = MoleculeCanvas(60, 30, 60.0, 30.0, aspect_ratio=2.0, style='braille')
     # Ethanol: C-C-O
     positions = [(-10.0, 0.0, 0.0), (0.0, 0.0, 0.0), (10.0, 0.0, 0.0)]
     elements = ['C', 'C', 'O']
@@ -614,17 +609,16 @@ def test_small_molecule_braille_style():
     assert has_braille
 
 
-def test_termol_cli_braille_style_and_spacing(monkeypatch, capsys):
-    """Verify CLI invocation with --style braille and --spacing."""
+def test_termol_cli_braille_style(monkeypatch, capsys):
+    """Verify CLI invocation with --style braille."""
     import sys
     from termol.cli import termol_cli
 
-    monkeypatch.setattr(sys, 'argv', ['termol', 'CC(=O)O', '--show2D', '--style', 'braille', '--spacing', '3.5'])
+    monkeypatch.setattr(sys, 'argv', ['termol', 'CC(=O)O', '--show2D', '--style', 'braille'])
     termol_cli()
 
     captured = capsys.readouterr().out
     assert "BRAILLE" in captured
-    assert "SPACING 3.5" in captured
     assert "O" in captured
     has_braille = any(0x2800 <= ord(ch) <= 0x28FF for ch in captured)
     assert has_braille

@@ -174,12 +174,11 @@ DEFAULT_ATOM_COLOR = (200, 200, 200)
 
 class MoleculeCanvas(Canvas):
     def __init__(self, char_width: int, char_height: int, width: float, height: float,
-                 aspect_ratio: float = 2.0, style: str = 'symbols', color_mode: str = 'cpk',
-                 bond_spacing: float = 3.0):
+                 aspect_ratio: float = 2.0, style: str = 'symbols', color_mode: str = 'cpk'):
         super().__init__(char_width, char_height, width, height, aspect_ratio)
         self.style = style.lower() if style else 'symbols'
         self.color_mode = color_mode.lower() if color_mode else 'cpk'
-        self.bond_spacing = float(bond_spacing)
+        self.bond_spacing = 3.0
 
         # Braille subpixel grid (2 horizontal dots x 4 vertical dots per character cell)
         self.sub_width = self.char_width * 2
@@ -231,7 +230,7 @@ class MoleculeCanvas(Canvas):
                     self.data[cy][cx] = chr(0x2800 + b)
 
     def draw_molecules(self, atom_positions, atom_elements, atom_charges, bonds,
-                       bond_orders=None, style=None, color_mode=None, bond_spacing=None):
+                       bond_orders=None, style=None, color_mode=None):
         active_style = (style or self.style).lower()
         active_color = (color_mode or self.color_mode).lower()
 
@@ -255,8 +254,7 @@ class MoleculeCanvas(Canvas):
         if active_style in ('braille', 'subpixel'):
             self._draw_bonds_braille(atom_positions, bonds, atom_elements=atom_elements,
                                      bond_orders=bond_orders, color_mode=active_color,
-                                     get_depth_scale=get_depth_scale,
-                                     bond_spacing=bond_spacing or self.bond_spacing)
+                                     get_depth_scale=get_depth_scale)
             self._finalize_braille_grid()
             self._draw_atoms_braille(atom_positions, atom_elements, atom_charges, bonds,
                                      color_mode=active_color, get_depth_scale=get_depth_scale)
@@ -269,12 +267,11 @@ class MoleculeCanvas(Canvas):
                             get_depth_scale=get_depth_scale)
 
     def _draw_bonds_braille(self, atom_positions, bonds, atom_elements=None,
-                            bond_orders=None, color_mode='cpk', get_depth_scale=None,
-                            bond_spacing=None):
+                            bond_orders=None, color_mode='cpk', get_depth_scale=None):
         if get_depth_scale is None:
             get_depth_scale = lambda z: 1.0
 
-        spacing = bond_spacing if bond_spacing is not None else self.bond_spacing
+        spacing = self.bond_spacing
 
         def draw_sub_line(x1, y1, z1, x2, y2, z2, color1, color2, dotted=False, dot_stride=2):
             dx = x2 - x1
@@ -586,9 +583,6 @@ class MoleculeCanvas(Canvas):
                     glyph = '◉'
                 else:
                     glyph = '●'
-                self.set_pixel_cell(cx, cy, glyph, z=z, color=atom_color)
-            elif style in ('dots', 'dot'):
-                glyph = '·' if element == 'H' else '•'
                 self.set_pixel_cell(cx, cy, glyph, z=z, color=atom_color)
             else:
                 # Classic chemical symbol (C, N, O, Cl, etc.)
