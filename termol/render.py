@@ -130,6 +130,56 @@ def show_molecule_2D(molecule_data, canvas, name=None, style='braille', color='d
     print(canvas)
 
 
+_RGB_256_CACHE = {}
+
+
+def rgb_to_256(r: int, g: int, b: int) -> int:
+    """Map 24-bit RGB (0-255) to the closest xterm-256 color index (16-255)."""
+    r_c = max(0, min(255, int(r)))
+    g_c = max(0, min(255, int(g)))
+    b_c = max(0, min(255, int(b)))
+    key = (r_c, g_c, b_c)
+    cached = _RGB_256_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    # Grayscale check: if all channels are within 8 units, map to grayscale ramp
+    if abs(r_c - g_c) <= 8 and abs(g_c - b_c) <= 8 and abs(r_c - b_c) <= 8:
+        gray = (r_c + g_c + b_c) // 3
+        if gray < 4:
+            res = 16  # Pure black in 6x6x6 cube
+        elif gray > 246:
+            res = 231  # Pure white in 6x6x6 cube
+        else:
+            # Grayscale ramp 232..255 spans 8..238 in steps of 10
+            idx = 232 + int(round((gray - 8) / 10.0))
+            res = max(232, min(255, idx))
+        if len(_RGB_256_CACHE) > 4096:
+            _RGB_256_CACHE.clear()
+        _RGB_256_CACHE[key] = res
+        return res
+
+    # 6x6x6 color cube: indices 16..231
+    def to_6cube(v: int) -> int:
+        if v < 48:
+            return 0
+        elif v < 115:
+            return 1
+        elif v < 155:
+            return 2
+        elif v < 195:
+            return 3
+        elif v < 235:
+            return 4
+        return 5
+
+    res = 16 + 36 * to_6cube(r_c) + 6 * to_6cube(g_c) + to_6cube(b_c)
+    if len(_RGB_256_CACHE) > 4096:
+        _RGB_256_CACHE.clear()
+    _RGB_256_CACHE[key] = res
+    return res
+
+
 def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
                      auto_resize=True, style='braille', color='depth', rep='trace'):
     """Interactive 3D curses renderer for small molecules and macromolecules."""
@@ -139,36 +189,66 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
 
     # Initialize curses color pairs if supported
     has_curses_colors = curses.has_colors()
+    use_256 = False
+    num_colors = 0
+    num_pairs = 0
+    pair_map = {}
+    next_pair_idx = 1
+
     if has_curses_colors:
         try:
             curses.start_color()
             curses.use_default_colors()
-            # Secondary Structure pairs:
-            curses.init_pair(1, curses.COLOR_MAGENTA, -1)  # Helices
-            curses.init_pair(2, curses.COLOR_YELLOW, -1)   # Sheets
-            curses.init_pair(3, curses.COLOR_CYAN, -1)     # Loops
-            # Rainbow spectrum pairs:
-            curses.init_pair(4, curses.COLOR_BLUE, -1)
-            curses.init_pair(5, curses.COLOR_CYAN, -1)
-            curses.init_pair(6, curses.COLOR_GREEN, -1)
-            curses.init_pair(7, curses.COLOR_YELLOW, -1)
-            curses.init_pair(8, curses.COLOR_RED, -1)
-            # Depth cueing pairs (depth / depth1 - Cyan Fog):
-            curses.init_pair(9, curses.COLOR_WHITE, -1)    # Foreground (bright)
-            curses.init_pair(10, curses.COLOR_CYAN, -1)    # Mid-ground
-            curses.init_pair(11, curses.COLOR_BLUE, -1)    # Background (dim)
-            # Ligand pair:
-            curses.init_pair(12, curses.COLOR_YELLOW, -1)
-            # Depth2 (Monochrome / Grayscale) pairs:
-            curses.init_pair(13, curses.COLOR_WHITE, -1)   # Foreground (bold)
-            curses.init_pair(14, curses.COLOR_WHITE, -1)   # Mid-ground (normal)
-            curses.init_pair(15, curses.COLOR_BLACK, -1)   # Background (dim)
-            # Depth3 (Twilight / Plasma) pairs:
-            curses.init_pair(16, curses.COLOR_YELLOW, -1)  # Foreground (warm peach / yellow)
-            curses.init_pair(17, curses.COLOR_MAGENTA, -1) # Mid-ground (magenta)
-            curses.init_pair(18, curses.COLOR_BLUE, -1)    # Background (midnight violet / blue)
+            num_colors = getattr(curses, 'COLORS', 8)
+            num_pairs = getattr(curses, 'COLOR_PAIRS', 64)
+            use_256 = num_colors >= 256
+
+            if use_256:
+                max_init = min(256, num_pairs)
+                for c in range(1, max_init):
+                    try:
+                        curses.init_pair(c, c, -1)
+                        pair_map[c] = c
+                    except Exception:
+                        break
+                next_pair_idx = len(pair_map) + 1
+            else:
+                # 8/16-color fallback palette
+                # Secondary Structure pairs:
+                curses.init_pair(1, curses.COLOR_MAGENTA, -1)  # Helices
+                curses.init_pair(2, curses.COLOR_YELLOW, -1)   # Sheets
+                curses.init_pair(3, curses.COLOR_CYAN, -1)     # Loops
+                # Rainbow spectrum pairs:
+                curses.init_pair(4, curses.COLOR_BLUE, -1)
+                curses.init_pair(5, curses.COLOR_CYAN, -1)
+                curses.init_pair(6, curses.COLOR_GREEN, -1)
+                curses.init_pair(7, curses.COLOR_YELLOW, -1)
+                curses.init_pair(8, curses.COLOR_RED, -1)
+                # Depth pairs (Cyan Fog / Grayscale / Twilight tiers):
+                curses.init_pair(9, curses.COLOR_WHITE, -1)
+                curses.init_pair(10, curses.COLOR_CYAN, -1)
+                curses.init_pair(11, curses.COLOR_BLUE, -1)
+                curses.init_pair(12, curses.COLOR_YELLOW, -1)
+                curses.init_pair(13, curses.COLOR_MAGENTA, -1)
+                curses.init_pair(14, curses.COLOR_BLACK, -1)
         except Exception:
             has_curses_colors = False
+            use_256 = False
+
+    def get_color_pair(color_idx: int) -> int:
+        nonlocal next_pair_idx
+        if color_idx in pair_map:
+            return pair_map[color_idx]
+        if next_pair_idx < num_pairs:
+            try:
+                curses.init_pair(next_pair_idx, color_idx, -1)
+                pair_map[color_idx] = next_pair_idx
+                pid = next_pair_idx
+                next_pair_idx += 1
+                return pid
+            except Exception:
+                pass
+        return pair_map.get(color_idx % max(1, len(pair_map)), 0)
 
     is_protein = isinstance(molecule_data, MoleculeData) and molecule_data.is_protein
 
@@ -272,7 +352,8 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
         if is_protein:
             display_name = name or molecule_data.name or "Protein"
             res_num = molecule_data.structure.total_residues if molecule_data.structure else len(molecule_data.atom_positions)
-            header_text = f" {display_name} ({res_num} res) [Rep: {active_rep.upper()} (M) | Style: {active_style.upper()} (B) | Color: {active_color.upper()} (C)] "
+            color_cap = "256c" if use_256 else f"{num_colors}c"
+            header_text = f" {display_name} ({res_num} res) [Rep: {active_rep.upper()} (M) | Style: {active_style.upper()} (B) | Color: {active_color.upper()} (C) | {color_cap}] "
         elif name:
             header_text = f" {name} "
 
@@ -316,48 +397,89 @@ def show_molecule_3D(stdscr, molecule_data, canvas, name=None, timeout=None,
 
                     attr = curses.A_NORMAL
                     if has_curses_colors and active_color != 'none':
-                        z = protein_canvas.z_buffer[cy, cx]
-                        if active_color in ('depth', 'depth1'):
-                            if z > 0:
-                                attr = curses.color_pair(9) | curses.A_BOLD
-                            elif z > -15:
-                                attr = curses.color_pair(10)
-                            else:
-                                attr = curses.color_pair(11) | curses.A_DIM
-                        elif active_color == 'depth2':
-                            if z > 0:
-                                attr = curses.color_pair(13) | curses.A_BOLD
-                            elif z > -15:
-                                attr = curses.color_pair(14)
-                            else:
-                                attr = curses.color_pair(15) | curses.A_BOLD
-                        elif active_color == 'depth3':
-                            if z > 0:
-                                attr = curses.color_pair(16) | curses.A_BOLD
-                            elif z > -15:
-                                attr = curses.color_pair(17) | curses.A_BOLD
-                            else:
-                                attr = curses.color_pair(18) | curses.A_DIM
-                        elif active_color == 'rainbow':
-                            color_rgb = protein_canvas.color_data[cy][cx]
-                            if color_rgb:
-                                r, g, b = color_rgb
-                                if b > r and b > g:
-                                    attr = curses.color_pair(4) | curses.A_BOLD
-                                elif g > r:
-                                    attr = curses.color_pair(6)
+                        color_rgb = protein_canvas.color_data[cy][cx]
+                        if use_256 and color_rgb is not None:
+                            c256 = rgb_to_256(color_rgb[0], color_rgb[1], color_rgb[2])
+                            attr = curses.color_pair(get_color_pair(c256))
+                        else:
+                            # 8/16-color fallback with dynamic depth normalization
+                            z = protein_canvas.z_buffer[cy, cx]
+                            z_range = getattr(protein_canvas, 'last_z_range', 1.0)
+                            z_min = getattr(protein_canvas, 'last_z_min', 0.0)
+                            z_norm = (z - z_min) / z_range if z_range > 0 else 0.5
+                            if z_norm < 0.0:
+                                z_norm = 0.0
+                            elif z_norm > 1.0:
+                                z_norm = 1.0
+
+                            # Ligand color check
+                            if color_rgb == (255, 230, 80):
+                                attr = curses.color_pair(12) | curses.A_BOLD
+                            elif active_color in ('depth', 'depth1'):
+                                if z_norm >= 0.85:
+                                    attr = curses.color_pair(9) | curses.A_BOLD
+                                elif z_norm >= 0.70:
+                                    attr = curses.color_pair(9)
+                                elif z_norm >= 0.55:
+                                    attr = curses.color_pair(10) | curses.A_BOLD
+                                elif z_norm >= 0.40:
+                                    attr = curses.color_pair(10)
+                                elif z_norm >= 0.25:
+                                    attr = curses.color_pair(10) | curses.A_DIM
+                                elif z_norm >= 0.12:
+                                    attr = curses.color_pair(11)
                                 else:
-                                    attr = curses.color_pair(8) | curses.A_BOLD
-                        elif active_color == 'ss':
-                            color_rgb = protein_canvas.color_data[cy][cx]
-                            if color_rgb:
-                                r, g, b = color_rgb
-                                if r > 180 and b > 180:
-                                    attr = curses.color_pair(1) | curses.A_BOLD  # Helix
-                                elif r > 180 and g > 150:
-                                    attr = curses.color_pair(2) | curses.A_BOLD  # Sheet
+                                    attr = curses.color_pair(11) | curses.A_DIM
+                            elif active_color == 'depth2':
+                                if z_norm >= 0.80:
+                                    attr = curses.color_pair(9) | curses.A_BOLD
+                                elif z_norm >= 0.60:
+                                    attr = curses.color_pair(9)
+                                elif z_norm >= 0.40:
+                                    attr = curses.color_pair(9) | curses.A_DIM
+                                elif z_norm >= 0.20:
+                                    attr = curses.color_pair(14) | curses.A_BOLD
                                 else:
-                                    attr = curses.color_pair(3)                  # Loop
+                                    attr = curses.color_pair(14) | curses.A_DIM
+                            elif active_color == 'depth3':
+                                if z_norm >= 0.85:
+                                    attr = curses.color_pair(12) | curses.A_BOLD
+                                elif z_norm >= 0.70:
+                                    attr = curses.color_pair(12)
+                                elif z_norm >= 0.55:
+                                    attr = curses.color_pair(13) | curses.A_BOLD
+                                elif z_norm >= 0.40:
+                                    attr = curses.color_pair(13)
+                                elif z_norm >= 0.25:
+                                    attr = curses.color_pair(13) | curses.A_DIM
+                                elif z_norm >= 0.12:
+                                    attr = curses.color_pair(11)
+                                else:
+                                    attr = curses.color_pair(11) | curses.A_DIM
+                            elif active_color == 'rainbow':
+                                if color_rgb:
+                                    r, g, b = color_rgb
+                                    depth_bold = curses.A_BOLD if z_norm > 0.45 else 0
+                                    if b > r and b > g:
+                                        attr = curses.color_pair(4) | depth_bold
+                                    elif g > r and g > b:
+                                        attr = curses.color_pair(6) | depth_bold
+                                    elif g > 150 and r > 150:
+                                        attr = curses.color_pair(7) | depth_bold
+                                    elif r > g and r > b:
+                                        attr = curses.color_pair(8) | depth_bold
+                                    else:
+                                        attr = curses.color_pair(5) | depth_bold
+                            elif active_color == 'ss':
+                                if color_rgb:
+                                    r, g, b = color_rgb
+                                    depth_bold = curses.A_BOLD if z_norm > 0.45 else 0
+                                    if r > 180 and b > 180:
+                                        attr = curses.color_pair(1) | depth_bold  # Helix
+                                    elif r > 180 and g > 150:
+                                        attr = curses.color_pair(2) | depth_bold  # Sheet
+                                    else:
+                                        attr = curses.color_pair(3) | depth_bold  # Loop
 
                     try:
                         stdscr.addstr(cy + 1, cx, char, attr)

@@ -247,6 +247,8 @@ class ProteinCanvas(Canvas):
         self.sub_height = self.char_height * 4
         self.braille_bits = np.zeros((self.char_height, self.char_width), dtype=int)
         self.sub_z_buffer = np.full((self.sub_height, self.sub_width), -np.inf, dtype=float)
+        self.last_z_min: float = -10.0
+        self.last_z_range: float = 20.0
 
     def clear(self):
         super().clear()
@@ -254,6 +256,8 @@ class ProteinCanvas(Canvas):
         self.sub_height = self.char_height * 4
         self.braille_bits = np.zeros((self.char_height, self.char_width), dtype=int)
         self.sub_z_buffer = np.full((self.sub_height, self.sub_width), -np.inf, dtype=float)
+        self.last_z_min: float = -10.0
+        self.last_z_range: float = 20.0
 
     def draw_protein(self, backbone_segments: List[Any], ligands: Optional[List[Any]] = None):
         """
@@ -286,6 +290,9 @@ class ProteinCanvas(Canvas):
         z_min = float(np.min(all_zs))
         z_max = float(np.max(all_zs))
         z_range = max(z_max - z_min, 1e-4)
+
+        self.last_z_min = z_min
+        self.last_z_range = z_range
 
         if self.style == 'braille':
             self._draw_protein_braille(backbone_segments, ligands, z_min, z_range)

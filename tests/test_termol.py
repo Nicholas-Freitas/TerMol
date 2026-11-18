@@ -275,3 +275,67 @@ def test_representation_switch_pose_preservation():
     tube_segs = get_segs('tube')
     assert np.allclose(segments[0][0].coord, tube_segs[0][0].coord, atol=1e-5)
     assert np.allclose(segments[0][100].coord, tube_segs[0][100].coord, atol=1e-5)
+
+
+def test_rgb_to_256_mapping():
+    """Verify 24-bit RGB to xterm-256 color mapping logic."""
+    from termol.render import rgb_to_256
+
+    # Pure black and white
+    assert rgb_to_256(0, 0, 0) == 16
+    assert rgb_to_256(255, 255, 255) == 231
+
+    # Grayscale ramp indices (232..255)
+    assert 232 <= rgb_to_256(10, 10, 10) <= 255
+    assert 232 <= rgb_to_256(128, 128, 128) <= 255
+    assert 232 <= rgb_to_256(230, 230, 230) <= 255
+
+    # Primaries
+    assert rgb_to_256(255, 0, 0) == 196
+    assert rgb_to_256(0, 255, 0) == 46
+    assert rgb_to_256(0, 0, 255) == 21
+
+    # Clamping out-of-range values
+    assert rgb_to_256(-10, -5, -1) == 16
+    assert rgb_to_256(300, 300, 300) == 231
+
+
+def test_protein_canvas_depth_tracking():
+    """Verify ProteinCanvas accurately tracks last_z_min and last_z_range."""
+    from termol.canvas import ProteinCanvas
+    from termol.backbone import generate_backbone_points
+    from termol.pdb import parse_pdb_text
+
+    canvas = ProteinCanvas(80, 40, 80, 40, aspect_ratio=2.0)
+    structure = parse_pdb_text(SAMPLE_PDB)
+    segments = generate_backbone_points(structure, samples_per_res=4)
+    canvas.draw_protein(segments, structure.ligands)
+
+    assert hasattr(canvas, 'last_z_min')
+    assert hasattr(canvas, 'last_z_range')
+    assert canvas.last_z_range > 0
+
+    # Every drawn cell with non-negative z should normalize into [0.0, 1.0]
+    for cy in range(canvas.char_height):
+        for cx in range(canvas.char_width):
+            z = canvas.z_buffer[cy, cx]
+            if z > -np.inf:
+                z_norm = (z - canvas.last_z_min) / canvas.last_z_range
+                assert -1e-6 <= z_norm <= 1.0 + 1e-6
+
+
+def test_depth_color_modes_ansi_render():
+    """Verify all depth color modes render ANSI escape sequences without warnings."""
+    from termol.canvas import ProteinCanvas
+    from termol.backbone import generate_backbone_points
+    from termol.pdb import parse_pdb_text
+
+    structure = parse_pdb_text(SAMPLE_PDB)
+    segments = generate_backbone_points(structure, samples_per_res=4)
+
+    for mode in ('depth1', 'depth2', 'depth3', 'rainbow', 'ss'):
+        canvas = ProteinCanvas(60, 30, 60, 30, aspect_ratio=2.0, style='braille', color_mode=mode)
+        canvas.draw_protein(segments, structure.ligands)
+        ansi_out = canvas.render_ansi()
+        assert len(ansi_out) > 0
+        assert "\033[" in ansi_out
