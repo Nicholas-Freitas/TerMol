@@ -672,6 +672,23 @@ def test_draw_multi_no_duplicate_window_on_exit(monkeypatch):
     assert call_count == 1
 
 
+def test_diagnostics_profiler():
+    """Verify termol.diagnostics accurately profiles pipeline and rasterization."""
+    from termol.diagnostics import profile_pipeline, format_diagnostic_report
+
+    res = profile_pipeline("CC(=O)O", num_frames=5, sleep_throttle=0.0, warmup=1)
+    assert res.mol_type == "Small Molecule"
+    assert res.total_frame_ms > 0
+    assert "draw" in res.stage_times_ms
+    assert "render_ansi" in res.stage_times_ms
+    assert res.substep_times_ms is not None
+
+    report = format_diagnostic_report([res])
+    assert "Pipeline Breakdown" in report
+    assert "Rasterization Substep Breakdown" in report
+
+
+
 
 
 
