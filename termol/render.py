@@ -621,6 +621,10 @@ class AnsiTerminalSession:
 
         if sys.platform == 'win32':
             try:
+                ctypes.windll.winmm.timeBeginPeriod(1)
+            except Exception:
+                pass
+            try:
                 kernel32 = ctypes.windll.kernel32
                 h_out = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
                 h_in = kernel32.GetStdHandle(-10)   # STD_INPUT_HANDLE
@@ -667,6 +671,10 @@ class AnsiTerminalSession:
             pass
 
         if sys.platform == 'win32':
+            try:
+                ctypes.windll.winmm.timeEndPeriod(1)
+            except Exception:
+                pass
             try:
                 if self.h_out is not None and self.orig_out_mode is not None:
                     ctypes.windll.kernel32.SetConsoleMode(self.h_out, self.orig_out_mode)
@@ -737,7 +745,8 @@ def read_available_input() -> str:
 
 
 def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
-                          auto_resize=True, style=None, color=None, rep='trace'):
+                          auto_resize=True, style=None, color=None, rep='trace',
+                          fps: float = 60.0):
     """
     Interactive 3D TrueColor ANSI renderer with responsive keyboard navigation.
     Directly streams 24-bit RGB ANSI escape sequences, completely bypassing curses.
@@ -872,22 +881,28 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
     rotation_paused = False
     theta = 1.2
 
+    target_dt = (1.0 / fps) if (fps and fps > 0) else 0.0
     fps_history = []
+    frame_count = 0
     last_frame_time = time.perf_counter()
 
     try:
         with AnsiTerminalSession():
             while True:
-                # Rolling FPS calculation (15-frame rolling average)
-                now = time.perf_counter()
-                dt = now - last_frame_time
-                last_frame_time = now
-                if dt > 0:
-                    fps_history.append(1.0 / dt)
-                    if len(fps_history) > 15:
-                        fps_history.pop(0)
+                frame_start = time.perf_counter()
 
-                fps_val = sum(fps_history) / len(fps_history) if fps_history else 0.0
+                # Rolling FPS calculation (15-frame rolling average, skipping initial startup tick)
+                if frame_count > 0:
+                    dt = frame_start - last_frame_time
+                    if dt > 0:
+                        fps_history.append(1.0 / dt)
+                        if len(fps_history) > 15:
+                            fps_history.pop(0)
+
+                last_frame_time = frame_start
+                frame_count += 1
+
+                fps_val = sum(fps_history) / len(fps_history) if fps_history else (fps if fps and fps > 0 else 0.0)
                 fps_str = f"[{fps_val:4.1f} FPS]"
 
                 # Check terminal size
@@ -975,8 +990,13 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
                     sys.stdout.write(frame)
                     sys.stdout.flush()
 
-                # Non-blocking input loop
-                time.sleep(0.025)
+                # Dynamic frame pacing: wait only remainder of target frame duration
+                if target_dt > 0:
+                    compute_elapsed = time.perf_counter() - frame_start
+                    remaining = target_dt - compute_elapsed
+                    if remaining > 0.001:
+                        time.sleep(remaining)
+
                 raw_input = read_available_input()
                 if raw_input:
                     # 1. Parse arrow keys (CSI sequences)
@@ -1103,7 +1123,7 @@ def show_molecule_3D_ansi(molecule_data, canvas, name=None, timeout=None,
 
 def draw(input_mol, name=None, width=80, height=40, three_d=True,
          add_hydrogens=False, timeout=None, stdscr=None, auto_resize=True,
-         style=None, color=None, rep=None, backend='ansi'):
+         style=None, color=None, rep=None, backend='ansi', fps=60.0):
     """
     Main function for TerMol. Renders small molecules or protein structures in 2D or 3D.
     Inputs:
@@ -1116,6 +1136,7 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
         color: For proteins: 'depth' (default), 'rainbow', 'ss', or 'none'; for small molecules: 'cpk' (default) or 'none'.
         rep: For proteins: 'cartoon' (default in 2D), 'trace' (default in 3D), 'ribbon', or 'tube'.
         backend: Interactive 3D backend: 'ansi' (default, 24-bit TrueColor) or 'curses' (legacy curses).
+        fps: Target framerate for interactive 3D mode (default: 60.0 FPS; set to 0 for uncapped).
     """
     default_rep = 'trace' if three_d else 'cartoon'
     active_rep = rep or default_rep
@@ -1129,17 +1150,17 @@ def draw(input_mol, name=None, width=80, height=40, three_d=True,
         else:
             draw_persistent(None, input_mol, name=name, width=width, height=height,
                             three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
-                            auto_resize=auto_resize, style=active_style, color=color, rep=active_rep, backend='ansi')
+                            auto_resize=auto_resize, style=active_style, color=color, rep=active_rep, backend='ansi', fps=fps)
     else:
         draw_persistent(None, input_mol, name=name, width=width, height=height,
                         three_d=three_d, add_hydrogens=add_hydrogens, timeout=timeout,
-                        auto_resize=auto_resize, style=active_style, color=color, rep=active_rep, backend=backend)
+                        auto_resize=auto_resize, style=active_style, color=color, rep=active_rep, backend=backend, fps=fps)
 
 
 def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
                     three_d=True, add_hydrogens=False, timeout=None,
                     auto_resize=True, style=None, color=None, rep=None,
-                    backend='ansi'):
+                    backend='ansi', fps=60.0):
     """Persistent wrapper for draw supporting both ANSI and curses backends."""
     default_rep = 'trace' if three_d else 'cartoon'
     active_rep = rep or default_rep
@@ -1158,14 +1179,14 @@ def draw_persistent(stdscr, input_mol, name=None, width=80, height=40,
                                timeout=timeout, auto_resize=auto_resize, style=active_style, color=color, rep=active_rep)
         else:
             show_molecule_3D_ansi(molecule_data, canvas, name=name, timeout=timeout,
-                                  auto_resize=auto_resize, style=active_style, color=color, rep=active_rep)
+                                  auto_resize=auto_resize, style=active_style, color=color, rep=active_rep, fps=fps)
     else:
         show_molecule_2D(molecule_data, canvas, name=name, style=active_style, color=color, rep=active_rep)
 
 
 def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
                add_hydrogens=False, timeout=None, auto_resize=True,
-               style=None, color=None, rep=None, backend='ansi'):
+               style=None, color=None, rep=None, backend='ansi', fps=60.0):
     """Render multiple molecules or proteins in sequence."""
     if names and len(names) != len(input_mols):
         raise ValueError("The number of names must match the number of inputs!")
@@ -1187,7 +1208,7 @@ def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
     if not three_d:
         for i in range(len(input_mols)):
             draw(input_mols[i], name=names[i], width=width, height=height,
-                 three_d=three_d, add_hydrogens=add_hydrogens, style=active_style, color=color, rep=active_rep, backend=backend)
+                 three_d=three_d, add_hydrogens=add_hydrogens, style=active_style, color=color, rep=active_rep, backend=backend, fps=fps)
         return
 
     if backend == 'curses':
@@ -1204,7 +1225,7 @@ def draw_multi(input_mols, names=None, width=80, height=40, three_d=True,
             draw_persistent(None, input_mols[i], name=names[i], timeout=timeout,
                             width=width, height=height, three_d=three_d,
                             add_hydrogens=add_hydrogens, auto_resize=auto_resize,
-                            style=active_style, color=color, rep=active_rep, backend='ansi')
+                            style=active_style, color=color, rep=active_rep, backend='ansi', fps=fps)
 
 
 def showcase(timeout=5, width=80, height=40):

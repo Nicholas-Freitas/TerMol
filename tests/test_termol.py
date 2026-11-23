@@ -676,7 +676,7 @@ def test_diagnostics_profiler():
     """Verify termol.diagnostics accurately profiles pipeline and rasterization."""
     from termol.diagnostics import profile_pipeline, format_diagnostic_report
 
-    res = profile_pipeline("CC(=O)O", num_frames=5, sleep_throttle=0.0, warmup=1)
+    res = profile_pipeline("CC(=O)O", num_frames=5, target_fps=0.0, warmup=1)
     assert res.mol_type == "Small Molecule"
     assert res.total_frame_ms > 0
     assert "draw" in res.stage_times_ms
@@ -686,6 +686,23 @@ def test_diagnostics_profiler():
     report = format_diagnostic_report([res])
     assert "Pipeline Breakdown" in report
     assert "Rasterization Substep Breakdown" in report
+
+
+def test_dynamic_framerate_pacing_and_cli_flag(monkeypatch):
+    """Verify --fps CLI flag is parsed and passed to draw_multi."""
+    import sys
+    from termol import cli
+
+    passed_fps = None
+    def mock_draw_multi(*args, **kwargs):
+        nonlocal passed_fps
+        passed_fps = kwargs.get('fps')
+
+    monkeypatch.setattr(cli, 'draw_multi', mock_draw_multi)
+    monkeypatch.setattr(sys, 'argv', ['termol', 'CC(=O)O', '--fps', '45.0'])
+    cli.termol_cli()
+    assert passed_fps == 45.0
+
 
 
 

@@ -37,6 +37,10 @@ def termol_cli():
         help='Representation for proteins: "cartoon" (default in 2D), "trace" (1D spline line, default in 3D), "ribbon", or "tube".'
     )
     parser.add_argument(
+        '--fps', type=float, default=60.0,
+        help='Target framerate for interactive 3D viewer (default: 60.0 FPS; set to 0 for uncapped).'
+    )
+    parser.add_argument(
         '--backend', choices=['ansi', 'curses'], default='ansi',
         help='Interactive 3D rendering backend: "ansi" (24-bit TrueColor with responsive keyboard navigation, default) or "curses" (legacy curses).'
     )
@@ -123,7 +127,8 @@ def termol_cli():
         style=args.style,
         color=args.color,
         rep=args.rep,
-        backend=args.backend
+        backend=args.backend,
+        fps=args.fps
     )
 
 

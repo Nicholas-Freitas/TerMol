@@ -39,6 +39,7 @@ class ProfileResult:
     fps: float
     compute_ms: float
     max_theoretical_fps: float
+    target_fps: float = 60.0
     stage_times_ms: Dict[str, float] = field(default_factory=dict)
     stage_percentages: Dict[str, float] = field(default_factory=dict)
     compute_percentages: Dict[str, float] = field(default_factory=dict)
@@ -53,15 +54,55 @@ def profile_pipeline(
     color: Optional[str] = None,
     width: int = 80,
     height: int = 40,
-    sleep_throttle: float = 0.025,
+    target_fps: float = 60.0,
     warmup: int = 5,
     profile_substeps: bool = True
 ) -> ProfileResult:
     """
     Profile a molecule or protein through the complete interactive rendering pipeline.
     Measures each stage: rotation, canvas clearing, drawing, ANSI string formatting,
-    frame assembly, I/O, sleep throttle, and input reading.
+    frame assembly, I/O, dynamic pacing wait, and input reading.
     """
+    import ctypes
+    if sys.platform == 'win32':
+        try:
+            ctypes.windll.winmm.timeBeginPeriod(1)
+        except Exception:
+            pass
+
+    try:
+        return _profile_pipeline_internal(
+            input_item=input_item,
+            num_frames=num_frames,
+            representation=representation,
+            style=style,
+            color=color,
+            width=width,
+            height=height,
+            target_fps=target_fps,
+            warmup=warmup,
+            profile_substeps=profile_substeps
+        )
+    finally:
+        if sys.platform == 'win32':
+            try:
+                ctypes.windll.winmm.timeEndPeriod(1)
+            except Exception:
+                pass
+
+
+def _profile_pipeline_internal(
+    input_item: Any,
+    num_frames: int = 60,
+    representation: str = 'trace',
+    style: str = 'high-res',
+    color: Optional[str] = None,
+    width: int = 80,
+    height: int = 40,
+    target_fps: float = 60.0,
+    warmup: int = 5,
+    profile_substeps: bool = True
+) -> ProfileResult:
     mol_data = get_molecule_data(input_item, three_d=True, representation=representation)
     is_protein = getattr(mol_data, 'is_protein', False)
     display_name = getattr(mol_data, 'name', None) or (str(input_item)[:20] if isinstance(input_item, str) else "Molecule")
@@ -154,10 +195,14 @@ def profile_pipeline(
         sink.flush()
         stage_records['out'].append((time.perf_counter_ns() - t0) / 1e6)
 
-        # 7. Sleep throttle (replicates real event loop timer)
+        # 7. Dynamic pacing wait (waits only remainder of target frame duration)
         t0 = time.perf_counter_ns()
-        if sleep_throttle > 0:
-            time.sleep(sleep_throttle)
+        if target_fps and target_fps > 0:
+            target_ns = int((1.0 / target_fps) * 1e9)
+            compute_ns = time.perf_counter_ns() - t_frame_start
+            remaining_s = (target_ns - compute_ns) / 1e9
+            if remaining_s > 0.001:
+                time.sleep(remaining_s)
         stage_records['sleep'].append((time.perf_counter_ns() - t0) / 1e6)
 
         # 8. Non-blocking input polling
@@ -208,6 +253,7 @@ def profile_pipeline(
         fps=fps,
         compute_ms=compute_ms,
         max_theoretical_fps=max_fps,
+        target_fps=target_fps,
         stage_times_ms=avg_times,
         stage_percentages=stage_pcts,
         compute_percentages=compute_pcts,
@@ -370,7 +416,8 @@ def format_diagnostic_report(results: List[ProfileResult]) -> str:
         lines.append(f"Target: {res.input_name} ({res.mol_type})")
         lines.append(f"  Representation : {res.representation}")
         lines.append(f"  Style / Color  : {res.style} / {res.color}")
-        lines.append(f"  Live Frametime : {res.total_frame_ms:6.2f} ms ({res.fps:4.1f} FPS with 25ms sleep throttle)")
+        throttle_desc = f"target: {res.target_fps:.0f} FPS" if res.target_fps > 0 else "uncapped"
+        lines.append(f"  Live Frametime : {res.total_frame_ms:6.2f} ms ({res.fps:4.1f} FPS; {throttle_desc})")
         lines.append(f"  Pure Compute   : {res.compute_ms:6.2f} ms ({res.max_theoretical_fps:5.1f} Max Theoretical FPS)")
         lines.append("")
 
@@ -448,10 +495,11 @@ def main():
     parser.add_argument('--frames', type=int, default=50, help="Number of benchmark frames per input (default: 50).")
     parser.add_argument('--rep', default=None, choices=['trace', 'cartoon', 'tube', 'ribbon'], help="Override protein representation.")
     parser.add_argument('--style', default='high-res', help="Rendering style (default: high-res).")
-    parser.add_argument('--no-sleep', action='store_true', help="Disable 25ms frame sleep throttle during benchmark.")
+    parser.add_argument('--fps', type=float, default=60.0, help="Target framerate for dynamic pacing (default: 60.0 FPS; set to 0 for uncapped).")
+    parser.add_argument('--no-sleep', action='store_true', help="Alias for --fps 0 (run uncapped without pacing wait).")
     args = parser.parse_args()
 
-    throttle = 0.0 if args.no_sleep else 0.025
+    target_fps = 0.0 if args.no_sleep else args.fps
 
     if not args.inputs:
         targets = [
@@ -466,7 +514,7 @@ def main():
 
     results = []
     for inp, rep in targets:
-        res = profile_pipeline(inp, num_frames=args.frames, representation=rep, style=args.style, sleep_throttle=throttle)
+        res = profile_pipeline(inp, num_frames=args.frames, representation=rep, style=args.style, target_fps=target_fps)
         results.append(res)
 
     print(format_diagnostic_report(results))
